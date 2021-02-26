@@ -52,6 +52,30 @@ def persist():
         writer.writeheader()
         for block in blockchain:
             writer.writerow(block.to_csv())
+        
+        block1 = helpers.Block(helpers.Operation("put", "key1", "value1"), None)
+        block1.mine()
+        block2 = helpers.Block(helpers.Operation("get", "key1", str(None)), block1)
+        block2.mine()
+        writer.writerow(block1.to_csv())
+        writer.writerow(block2.to_csv())
+
+def reconstruct():
+    global blockchain
+    with open('blockchain.csv', newline='') as csvfile:
+        blocks = csv.reader(csvfile, delimiter=',', quotechar='|')
+
+        firstBlock = True
+        for block in blocks:
+            if firstBlock:
+                firstBlock = False
+                continue
+            operationTokens = (block[0])[1:-1].split(" ")
+            operation = helpers.Operation(operationTokens[0], operationTokens[1], operationTokens[2])
+            blockchain.append(helpers.Block(operation, block[1], block[2]))
+            print(f'Added block: {blockchain[-1]}', flush=True)
+    
+    print(f'Reconstructed blockchain: {blockchain}', flush=True)
 
 
 def input_listener():
@@ -69,10 +93,6 @@ def input_listener():
         elif command == "exit":
             helpers.handle_exit([inputStreams[0], inputStreams[1], sock_out1, sock_out2])
         elif command == "persist":
-            op1 = helpers.Operation("get", "steve", "vikram")
-            block1 = helpers.Block(op1, None)
-            block1.mine()
-            blockchain.append(block1)
             persist()
         elif command == "put":
             key = tokens[1]
@@ -84,6 +104,8 @@ def input_listener():
             key = tokens[1]
             print(f'Database value for {key} = {database.get(key)}', flush=True)
             temporary_operations.put(helpers.Operation(command, key, None))
+        elif command == "reconstruct":
+            reconstruct()
 
         user_input = input()
 

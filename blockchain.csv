@@ -1,2 +1,3 @@
 operations,prev_hash,nonce
-"<get,steve,vikram>",None,0
+<put key1 value1>,None,0
+<get key1 None>,1cf47cccc4bf60e82a0a470818150f7b22c64c9ba2ee3ec62969febe742e8154,1

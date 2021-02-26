@@ -56,14 +56,14 @@ def is_valid_nonce(char):
         return False
 
 class Block:
-    def __init__(self, op, prev_block):
+    def __init__(self, op, prev_block, nonce = None):
         self.operation = op
         if prev_block != None:
-            self.prev_hash = sha256(prev_block)
+            self.prev_hash = sha256(str(prev_block).encode('utf-8')).hexdigest()
         else:
             self.prev_hash = None
-        self.nonce = 0
-    
+        self.nonce = nonce
+
     def mine(self):
         randomNonce = 0
         currHash = sha256(str.encode(str(self.operation) + str(randomNonce))).hexdigest()
@@ -86,4 +86,4 @@ class Operation:
         self.value = value
         
     def __str__(self):
-     return "<" + self.operation + "," + self.key + "," + self.value + ">"
+     return "<" + str(self.operation) + " " + str(self.key) + " " + str(self.value) + ">"
