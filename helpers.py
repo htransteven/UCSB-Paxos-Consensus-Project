@@ -1,5 +1,7 @@
 import sys
 import os
+import struct
+from hashlib import sha256
 
 def handle_exit(sockets):
     print(f'\nExiting program...', flush=True)
@@ -46,3 +48,42 @@ def get_output_connection_tuples(pid, IP, port_base):
         return (IP, port_base + 4), (IP, port_base + 2)
     
     raise Exception("pid must be 1, 2, 3, 4, or 5")
+
+def is_valid_nonce(char):
+    if(char == "1" or char == "0" or char == "2"):
+        return True
+    else:
+        return False
+
+class Block:
+    def __init__(self, op, prev_block):
+        self.operation = op
+        if prev_block != None:
+            self.prev_hash = sha256(prev_block)
+        else:
+            self.prev_hash = None
+        self.nonce = 0
+    
+    def mine(self):
+        randomNonce = 0
+        currHash = sha256(str.encode(str(self.operation) + str(randomNonce))).hexdigest()
+        while (not is_valid_nonce(currHash[-1])):
+            randomNonce += 1
+            currHash = sha256(str.encode(str(self.operation) + str(randomNonce))).hexdigest()
+        self.nonce = randomNonce
+        print(f'Done mining, took {randomNonce} attempts.')
+
+    def to_csv(self):
+        return {'operations': str(self.operation), 'prev_hash': str(self.prev_hash), 'nonce': str(self.nonce)}
+
+    def __str__(self):
+        return str(self.operation) + " " + str(self.prev_hash) + " " + str(self.nonce)
+
+class Operation:
+    def __init__(self, op, key, value):
+        self.operation = op
+        self.key = key
+        self.value = value
+        
+    def __str__(self):
+     return "<" + self.operation + "," + self.key + "," + self.value + ">"
