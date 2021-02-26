@@ -8,9 +8,9 @@ import queue
 import time
 
 IP = socket.gethostname()
+encoding = 'utf-8'
 port_base = 6000
 pid = int(sys.argv[1])  # pid = 1, 2, 3, 4, or 5
-# port_server = int(sys.argv[2])  # server port
 connected_clients = 0
 max_clients = 4
 
@@ -32,21 +32,7 @@ inputStreams = []
 
 def accept_connections():
     global connected_clients
-    if pid == 1:
-        print(f'Expecting connection from {port_base + 4}', flush=True)
-        print(f'Expecting connection from {port_base + 2}', flush=True)
-    elif pid == 2:
-        print(f'Expecting connection from {port_base + 4}', flush=True)
-        print(f'Expecting connection from {port_base + 5}', flush=True)
-    elif pid == 3:
-        print(f'Expecting connection from {port_base + 2}', flush=True)
-        print(f'Expecting connection from {port_base + 1}', flush=True)
-    elif pid == 4:
-        print(f'Expecting connection from {port_base + 3}', flush=True)
-        print(f'Expecting connection from {port_base + 5}', flush=True)
-    elif pid == 5:
-        print(f'Expecting connection from {port_base + 1}', flush=True)
-        print(f'Expecting connection from {port_base + 3}', flush=True)
+    helpers.print_expecting_connections(pid, port_base)
     while (connected_clients < max_clients):
         stream, addr = sock_in1.accept()
         inputStreams.append(stream)
@@ -59,34 +45,22 @@ def accept_connections():
 threading.Thread(target=accept_connections, args=()).start()
 # threading.Thread(target=accept_connections, args=(sock_in2), daemon=True).start()
 
-# connection flow = every processor sends out 2 requests and listens for 2
-# p1 connects to p3 and p5, p1 listens for p4 and p2
-# p3 connects to p5 and p4, p3 listens for p2 and p1
-# p5 connects to p4 and p2, p5 listens for p1 and p3
-# p4 connects to p2 and p1, p4 listens for p3 and p5
-# p2 connects to p1 and p3, p2 listens for p4 and p5
-
 def send_connections():
     global connected_clients
-    if pid == 1:
-        sock_out1.connect_ex((IP, port_base + 3))
-        sock_out2.connect_ex((IP, port_base + 5))
-    elif pid == 2:
-        sock_out1.connect_ex((IP, port_base + 1))
-        sock_out2.connect_ex((IP, port_base + 3))
-    elif pid == 3:
-        sock_out1.connect_ex((IP, port_base + 5))
-        sock_out2.connect_ex((IP, port_base + 4))
-    elif pid == 4:
-        sock_out1.connect_ex((IP, port_base + 2))
-        sock_out2.connect_ex((IP, port_base + 1))
-    elif pid == 5:
-        sock_out1.connect_ex((IP, port_base + 4))
-        sock_out2.connect_ex((IP, port_base + 2))
-    connected_clients += 2
-#     # Spawn the thread to handle recvdata
-#     #threading.Thread(target=client_communications,
-#     #                 args=(sock_clientA, sock_clientA.getsockname()), daemon=True).start()
+    out_addr1, out_addr2 = helpers.get_output_connection_tuples(pid, IP, port_base)
+    while True:
+        sock_out1_result = sock_out1.connect_ex(out_addr1)
+        sock_out2_result = sock_out2.connect_ex(out_addr2)
+        if sock_out1_result == 0:
+            connected_clients += 1
+        if sock_out2_result == 0:
+            connected_clients += 1
+        time.sleep(0.5)
+        
+        # print(f'connected sockets = {connected_clients}', flush=True)
+    # Spawn the thread to handle recvdata
+    #threading.Thread(target=client_communications,
+    #                 args=(sock_clientA, sock_clientA.getsockname()), daemon=True).start()
 
 threading.Thread(target=send_connections, args=()).start()
 
