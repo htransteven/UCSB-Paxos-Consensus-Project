@@ -16,6 +16,33 @@ pid = int(sys.argv[1])  # pid = 1, 2, 3, 4, or 5
 connected_clients = 0
 max_clients = 4
 
+leader = pid
+leader_lock = threading.Lock()
+
+def set_leader(new_leader_pid):
+    global leader
+    leader_lock.acquire()
+    leader = new_leader_pid
+    leader_lock.release()
+    print(f"New leader selected: PID = {new_leader_pid}")
+    threading.Thread(target=send_leader_to_client_stream,
+                    args=(), daemon=True).start()
+
+leader_acks = 0
+leader_acks_lock = threading.Lock()
+
+def increment_acks():
+    global leader_acks
+    leader_acks_lock.acquire()
+    leader_acks += 1
+    leader_acks_lock.release()
+
+def set_acks(new_acks):
+    global leader_acks
+    leader_acks_lock.acquire()
+    leader_acks = new_acks
+    leader_acks_lock.release()
+
 # sending socket 1
 sock_out1 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 sock_out1.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -31,17 +58,34 @@ sock_in1.bind((IP, port_base + pid))
 sock_in1.listen(2)
 inputStreams = []
 
+broadcast_lock = threading.Lock()
+
+def broadcast_message(message):
+    global inputStreams, sock_out1, sock_out2
+    broadcast_lock.acquire()
+
+    for sock in inputStreams:
+        try:
+            sock.sendall(str.encode(message))
+        except:
+            print(f'failed to send data to {sock.getsockname()}', flush=True)
+
+    try:
+        sock_out1.sendall(str.encode(message))
+    except:
+        print(f'failed to send data to {sock_out1.getsockname()}', flush=True)
+
+    try:
+        sock_out2.sendall(str.encode(message))
+    except:
+        print(f'failed to send data to {sock_out2.getsockname()}', flush=True)
+
+    broadcast_lock.release()
+
 # TA how to prioritize
 temporary_operations = queue.PriorityQueue(maxsize=0)
 database = {}
 blockchain = []
-
-def broadcast_message(message):
-    global inputStreams, sock_out1, sock_out2
-    for sock in inputStreams:
-        sock.sendall(str.encode(message))
-    sock_out1.sendall(str.encode(message))
-    sock_out2.sendall(str.encode(message))
 
 # str(Operation) => <put,someKey,someValue>
 # str(Block) => <put,someKey,someValue> someReallyLongHash1283812312 35
@@ -65,7 +109,6 @@ def reconstruct():
     global blockchain
     with open('blockchain.csv', newline='') as csvfile:
         blocks = csv.reader(csvfile, delimiter=',', quotechar='|')
-
         firstBlock = True
         for block in blocks:
             if firstBlock:
@@ -75,8 +118,26 @@ def reconstruct():
             operation = helpers.Operation(operationTokens[0], operationTokens[1], operationTokens[2])
             blockchain.append(helpers.Block(operation, block[1], block[2]))
             print(f'Added block: {blockchain[-1]}', flush=True)
-    
     print(f'Reconstructed blockchain: {blockchain}', flush=True)
+
+def determine_leader(leader_pid, stream):
+    global leader
+    if leader_pid >= leader:
+        set_leader(leader_pid)
+        stream.sendall(str.encode(f"server AL"))
+    elif leader_pid < leader:
+        stream.sendall(str.encode(f"server RL {leader}"))
+
+def send_leader_to_client_stream():
+    global inputStreams
+    if len(inputStreams) <= 2:
+        return
+    
+    broadcast_message(f"server NL {leader}")
+
+def send_client_leader_pid(stream):
+    global leader
+    stream.sendall(str.encode(f"server NL {leader}"))
 
 def server_communications(stream):
     addr = stream.getsockname()
@@ -111,7 +172,24 @@ def server_communications(stream):
                     temporary_operations.put(helpers.Operation(command, key, None))
                 elif command == "reconstruct":
                     reconstruct()
+                elif command == "leader":
+                    threading.Thread(target=send_client_leader_pid,
+                                    args=(stream,), daemon=True).start()
             elif sender == "server":
+                # request leadership
+                if command == "RL":
+                    leader_pid = tokens[2]
+                    threading.Thread(target=determine_leader,
+                                    args=(int(leader_pid),stream), daemon=True).start()
+                # acknowledge leader
+                elif command == "AL":
+                    threading.Thread(target=increment_acks, args=(), daemon=True).start()
+                # new leader was chosen
+                elif command == "NL":
+                    leader_pid = tokens[2]
+                    threading.Thread(target=set_leader,
+                                    args=(int(leader_pid),), daemon=True).start()
+
                 print(f'Data received from another server: {tokens}', flush=True)
         else:
             break
@@ -128,7 +206,23 @@ def accept_connections():
                          args=(stream,), daemon=True).start()
 
 threading.Thread(target=accept_connections, args=()).start()
-# threading.Thread(target=accept_connections, args=(sock_in2), daemon=True).start()
+
+#sock_out1, sock_out2, inputStreams
+def request_leadership():
+    global pid, leader_acks
+    broadcast_message(f"server RL {pid}")
+
+    ack_wait = 0
+    while (leader_acks < max_clients / 2):
+        print(f"leader_acks = {leader_acks}, max_clients/2 = {max_clients/2}")
+        if leader != pid:
+            return
+        ack_wait += 1
+        time.sleep(1)
+        broadcast_message(f"server RL {pid}")
+        # maybe sleep after awhile
+
+    broadcast_message(f"server NL {pid}")
 
 def send_connections():
     global connected_clients
@@ -147,6 +241,8 @@ def send_connections():
         time.sleep(0.5)
 
 threading.Thread(target=send_connections, args=()).start()
+
+threading.Thread(target=request_leadership, args=()).start()
 
 while True:
     try:
