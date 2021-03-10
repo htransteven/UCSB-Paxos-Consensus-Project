@@ -19,15 +19,6 @@ max_clients = 4
 leader = pid
 leader_lock = threading.Lock()
 
-def set_leader(new_leader_pid):
-    global leader
-    leader_lock.acquire()
-    leader = new_leader_pid
-    leader_lock.release()
-    print(f"New leader selected: PID = {new_leader_pid}")
-    threading.Thread(target=send_leader_to_client_stream,
-                    args=(), daemon=True).start()
-
 leader_acks = 0
 leader_acks_lock = threading.Lock()
 
@@ -57,6 +48,7 @@ sock_in1.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 sock_in1.bind((IP, port_base + pid))
 sock_in1.listen(2)
 inputStreams = []
+leader_stream = None
 
 broadcast_lock = threading.Lock()
 
@@ -64,6 +56,7 @@ def broadcast_message(message):
     global inputStreams, sock_out1, sock_out2
     broadcast_lock.acquire()
 
+    time.sleep(0.5)
     for sock in inputStreams:
         try:
             sock.sendall(str.encode(message))
@@ -120,13 +113,28 @@ def reconstruct():
             print(f'Added block: {blockchain[-1]}', flush=True)
     print(f'Reconstructed blockchain: {blockchain}', flush=True)
 
+def set_current_leader(leader_pid):
+    global leader
+    leader_lock.acquire()
+    leader = leader_pid
+    leader_lock.release()
+
 def determine_leader(leader_pid, stream):
     global leader
-    if leader_pid >= leader:
-        set_leader(leader_pid)
+    leader_lock.acquire()
+
+    if leader_pid > leader:
+        leader = leader_pid
+        print(f"New leader selected: PID = {leader}")
+        threading.Thread(target=send_leader_to_client_stream,
+                        args=(), daemon=True).start()
+        time.sleep(0.5)
         stream.sendall(str.encode(f"server AL"))
-    elif leader_pid < leader:
-        stream.sendall(str.encode(f"server RL {leader}"))
+    elif leader_acks >= max_clients / 2 and leader_pid < leader:
+        time.sleep(0.5)
+        stream.sendall(str.encode(f"server CL {leader}"))
+    
+    leader_lock.release()
 
 def send_leader_to_client_stream():
     global inputStreams
@@ -137,9 +145,11 @@ def send_leader_to_client_stream():
 
 def send_client_leader_pid(stream):
     global leader
-    stream.sendall(str.encode(f"server NL {leader}"))
+    time.sleep(0.5)
+    stream.sendall(str.encode(f"server CL {leader}"))
 
 def server_communications(stream):
+    global leader_stream, leader, pid
     addr = stream.getsockname()
     while True:
         data = stream.recv(1024)
@@ -147,11 +157,14 @@ def server_communications(stream):
             decoded = data.decode(encoding)
             print(f'Data received ({decoded}) from {addr}', flush=True)
             tokens = decoded.split(" ", 2)
-            print(f'Data -> Tokens: {tokens}', flush=True)
+            # print(f'Data -> Tokens: {tokens}', flush=True)
             sender = tokens[0]
             command = tokens[1]
             # example command -> client broadcast 'hello world'
             if sender == "client":
+                if leader != pid and leader_stream != None:
+                    leader_stream.sendall(data)
+                    continue
                 if command == "broadcast":
                     sentence = tokens[2].strip("'")
                     threading.Thread(target=broadcast_message,
@@ -186,11 +199,15 @@ def server_communications(stream):
                     threading.Thread(target=increment_acks, args=(), daemon=True).start()
                 # new leader was chosen
                 elif command == "NL":
+                    leader_stream = stream
                     leader_pid = tokens[2]
-                    threading.Thread(target=set_leader,
+                    threading.Thread(target=determine_leader,
+                                    args=(int(leader_pid),stream), daemon=True).start()
+                # current leader
+                elif command == "CL":
+                    leader_pid = tokens[2]
+                    threading.Thread(target=set_current_leader,
                                     args=(int(leader_pid),), daemon=True).start()
-
-                print(f'Data received from another server: {tokens}', flush=True)
         else:
             break
 
@@ -214,7 +231,7 @@ def request_leadership():
 
     ack_wait = 0
     while (leader_acks < max_clients / 2):
-        print(f"leader_acks = {leader_acks}, max_clients/2 = {max_clients/2}")
+        # print(f"leader_acks = {leader_acks}, max_clients/2 = {max_clients/2}")
         if leader != pid:
             return
         ack_wait += 1

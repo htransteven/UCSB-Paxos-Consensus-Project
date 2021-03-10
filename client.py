@@ -11,7 +11,8 @@ import csv
 IP = socket.gethostname()
 encoding = 'utf-8'
 port_base = 6000
-leader_pid = 5
+max_servers = 5
+leader_pid = max_servers
 
 leader_pid_lock = threading.Lock()
 
@@ -48,12 +49,13 @@ def server_communications(stream):
             command = tokens[1]
 
             if sender == "server":
-                if command == "NL":
+                if command == "CL" or command == "NL":
                     leader_pid = tokens[2]
                     threading.Thread(target=set_leader_pid,
                                     args=(leader_pid,), daemon=True).start()
 
-def connect_to_leader():
+def connect_to_leader(_callback = None):
+    global sock_out, max_servers
     sock_out_result = sock_out.connect_ex((IP,port_base + leader_pid))
     while (sock_out_result != 0):
         decrement_leader_pid()
@@ -62,13 +64,23 @@ def connect_to_leader():
     threading.Thread(target=server_communications,
                 args=(sock_out,), daemon=True).start()
 
+    if _callback:
+        _callback()
+
 threading.Thread(target=connect_to_leader, args=()).start()
 
 def input_listener():
-    global inputStreams, blockchain
+    global inputStreams, blockchain, sock_out, leader_pid
     user_input = input()
     while True:
-        sock_out.sendall(str.encode("client " + user_input))
+        if user_input == "whois leader":
+            print(f"I think the leader is server {leader_pid}")
+        else:
+            try:
+                sock_out.sendall(str.encode("client " + user_input))
+            except:
+                sock_out.close()
+                threading.Thread(target=connect_to_leader, args=(sock_out.sendall(str.encode("client " + user_input)),)).start()
         user_input = input()
 
 threading.Thread(target=input_listener, args=()).start()
