@@ -245,6 +245,29 @@ def handle_blockchain_reconstruct():
     for b in persisted_blockchain:
         append_to_blockchain(b)
 
+def handle_operations_queue():
+    global temporary_operations
+
+    while True:
+        next_op = temporary_operations.get() # defaults to block=True and timeout=None
+        threading.Thread(target=begin_paxos,
+                                    args=(next_op[0],next_op[1]), daemon=True).start()
+
+def handle_get_callback(stream):
+    def callback(block):
+        global database
+        if block.operation.key in database:
+            direct_message(f"{block.operation.key}: {database[block.operation.key]}", stream)
+        else:
+            direct_message(f"no value was found for the key: {block.operation.key}", stream)
+    return callback
+
+def handle_put_callback(stream):
+    def callback(block):
+        global database
+        direct_message(f"{block.operation.key}: {block.operation.value}", stream)
+    return callback
+
 def server_communications(stream):
     global pid, blockchain, database, broken_streams
     addr = stream.getsockname()
@@ -259,7 +282,7 @@ def server_communications(stream):
             sender = sender_tokens[0]
             payload = tokens[1]
             if sender == "client":
-                print(f'[client]: {payload}', flush=True)
+                print(f'[C]: {payload}', flush=True)
                 # example payload = put - student_id1 - '858-123-4567'
                 payload_tokens = payload.split(PAYLOAD_DELIMITER)
                 command = payload_tokens[0]
@@ -271,17 +294,11 @@ def server_communications(stream):
                     key = payload_tokens[1]
                     value = payload_tokens[2].strip("'")
 
-                    threading.Thread(target=begin_paxos,
-                                    args=(payload,), daemon=True).start()
-
-                    database[key] = value
-                    temporary_operations.put(bc.Operation(command, key, value))
+                    temporary_operations.put((bc.Operation(command, key, value), handle_put_callback(stream)))
                 elif command == "get":
                     key = payload_tokens[1]
 
-                    threading.Thread(target=begin_paxos,
-                                    args=(payload,), daemon=True).start()
-                    temporary_operations.put(bc.Operation(command, key, None))
+                    temporary_operations.put((bc.Operation(command, key, None), handle_get_callback(stream)))
                 elif command == "persist":
                     threading.Thread(target=bc.persist,
                                     args=(pid, blockchain), daemon=True).start()
@@ -308,7 +325,7 @@ def server_communications(stream):
                     if broken_streams[sender_pid] == True:
                         continue
 
-                print(f'[{sender_pid}]: {payload}', flush=True)
+                print(f'[P{sender_pid}]: {payload}', flush=True)
                 
                 if command == "failLink":
                     src = int(payload_tokens[1])
@@ -360,7 +377,7 @@ def server_communications(stream):
 # 1. Server is alive
 # 2. If server receives message from client, begin leader election
 #######################################################################
-def begin_paxos(proposed_value):
+def begin_paxos(proposed_operation, callback):
     global acks, ballot_num, accept_val, highest_received_val
 
     # phase 1
@@ -371,13 +388,7 @@ def begin_paxos(proposed_value):
             print(f"ballot {ballot_num} timed out during phase 1")
             return
 
-    # received majority of promise messages, begin mining block to send as accept_val
-    payload_tokens = proposed_value.split(PAYLOAD_DELIMITER)
-    command = payload_tokens[0]
-    key = payload_tokens[1]
-    value = payload_tokens[2]
-
-    operation = bc.Operation(command, key, value)
+    operation = proposed_operation
     prev_block = None
     if len(blockchain) > 0:
         prev_block = blockchain[-1]
@@ -407,6 +418,8 @@ def begin_paxos(proposed_value):
     broadcast_decide()
 
     # reset
+
+    callback(accept_val)
 
 # accept any incoming socket connection and create a thread to handle communication on this new stream
 def accept_connections():
@@ -464,6 +477,7 @@ def input_listener():
 
 threading.Thread(target=accept_connections, args=()).start()
 threading.Thread(target=send_connections, args=()).start()
+threading.Thread(target=handle_operations_queue, args=()).start()
 threading.Thread(target=input_listener, args=()).start()
 
 while True:

@@ -52,11 +52,18 @@ def server_communications(stream, stream_pid):
 
         if data:
             decoded = data.decode(encoding)
-            print(f'Data received ({decoded}) from {addr}', flush=True)
-            tokens = decoded.split(" ", 2)
-
-            sender = tokens[0]
-            command = tokens[1]
+            
+            tokens = decoded.split(" -> ")
+            sender_tokens = tokens[0].split(" ")
+            sender = sender_tokens[0]
+            payload = tokens[1]
+            if sender == "server":
+                sender_pid = int(sender_tokens[1])
+                payload_tokens = payload.split(PAYLOAD_DELIMITER)
+                command = payload_tokens[0]
+                if command == "prepare" or command == "accept" or command == "decide":
+                    continue
+                print(f'[{sender_pid}]: {payload}', flush=True)
 
 def input_listener():
     global leader_stream
@@ -76,7 +83,7 @@ def input_listener():
         user_input = input()
 
 def connect_to_server(pid):
-    print(f"attempting to connect to server {pid}")
+    # print(f"attempting to connect to server {pid}")
     sock_server_pid = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock_server_pid.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
@@ -92,7 +99,6 @@ def connect_to_leader():
     server_id = max_pid
     while server_id >= min_pid:
         leader_stream = connect_to_server(server_id)
-        print(f"connection result = {leader_stream}")
         if leader_stream != None:
             set_leader(server_id)
             set_leader_stream(leader_stream)
