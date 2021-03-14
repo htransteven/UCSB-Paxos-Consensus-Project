@@ -1,6 +1,8 @@
 import helpers
 from helpers import PAYLOAD_DELIMITER
 
+import csv
+import os
 from hashlib import sha256
 
 def print_blockchain(blockchain):
@@ -20,7 +22,7 @@ def parse_block_from_payload(payload):
     return block
 
 def get_file_name(pid):
-    return 'blockchain' + '_p' + pid + '.csv'
+    return f"blockchain_p{pid}.csv"
 
 # stores array of blocks in csv format
 def persist(pid, blockchain):
@@ -29,7 +31,7 @@ def persist(pid, blockchain):
         fieldnames = ['operations', 'prev_hash', 'nonce']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
-        writer.writeheader()
+        # writer.writeheader()
         for block in blockchain:
             writer.writerow(block.to_csv())
 

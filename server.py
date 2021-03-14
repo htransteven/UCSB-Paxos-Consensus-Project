@@ -3,13 +3,11 @@ from helpers import PAYLOAD_DELIMITER
 import blockchain as bc
 
 import socket
-import os
 import csv
 import threading
 import sys
 import queue
 import time
-import csv
 
 # Socket Information
 IP = socket.gethostname()
@@ -230,7 +228,7 @@ def handle_received_decide(received_ballot_num, received_accept_val):
 # End Paxos functions
 
 def server_communications(stream):
-    global pid, broken_streams
+    global pid, blockchain, broken_streams
     addr = stream.getsockname()
     while True:
         data = stream.recv(1024)
@@ -267,9 +265,11 @@ def server_communications(stream):
                                     args=(payload,), daemon=True).start()
                     temporary_operations.put(bc.Operation(command, key, None))
                 elif command == "persist":
-                    persist()
+                    threading.Thread(target=bc.persist,
+                                    args=(pid, blockchain), daemon=True).start()
                 elif command == "reconstruct":
-                    reconstruct()
+                    threading.Thread(target=bc.reconstruct,
+                                    args=(pid), daemon=True).start()
                 elif command == "exit":
                     helpers.handle_exit([inputStreams[0], inputStreams[1], sock_out1, sock_out2])
             elif sender == "server":
@@ -320,6 +320,12 @@ def server_communications(stream):
 
                     threading.Thread(target=handle_received_decide,
                                     args=(received_ballot_num, received_accept_val), daemon=True).start()
+                elif command == "persist":
+                    threading.Thread(target=bc.persist,
+                                    args=(pid, blockchain), daemon=True).start()
+                elif command == "reconstruct":
+                    threading.Thread(target=bc.reconstruct,
+                                    args=(pid), daemon=True).start()
         else:
             break
 
