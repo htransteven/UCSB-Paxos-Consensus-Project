@@ -10,57 +10,42 @@ import csv
 
 IP = socket.gethostname()
 encoding = 'utf-8'
+PAYLOAD_DELIMITER = " - "
 port_base = 6000
+min_pid = 1
+max_pid = 5
 
-max_servers = 5
+leader = None
+leader_lock = threading.Lock()
+leader_stream = None
+leader_stream_lock = threading.Lock()
 
+def set_leader(new_leader):
+    global leader, leader_lock
+    leader_lock.acquire()
+    leader = new_leader
+    leader_lock.release()
 
-
-servers_list = []
-for i in range(max_servers + 1):
-    if i == 0:
-        servers_list.append(None)
-        continue
-    sock_server_i = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock_server_i.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock_server_i.connect_ex((IP,port_base + i))
-    servers_list.append(sock_server_i)
-
-leader_pid = max_servers
-leader_pid_lock = threading.Lock()
-
-def set_leader_pid(new_leader_pid):
-    global leader_pid
-    leader_pid_lock.acquire()
-    leader_pid = new_leader_pid
-    leader_pid_lock.release()
-
-def decrement_leader_pid():
-    global leader_pid
-    leader_pid_lock.acquire()
-    if leader_pid == 1:
-        leader_pid = 5
-    else:
-        leader_pid -= 1
-    leader_pid_lock.release()
+def set_leader_stream(stream):
+    global leader_stream, leader_stream_lock
+    leader_stream_lock.acquire()
+    leader_stream = stream
+    leader_stream_lock.release()
     
 def server_communications(stream, stream_pid):
-    global leader_pid
+    global leader
 
     addr = stream.getsockname()
-    stream.connect_ex((IP,port_base + stream_pid))
-
     while True:
-        if stream_pid != leader_pid:
+        if stream_pid != leader:
             return
+
         try:
             data = stream.recv(1024)
         except socket.error as e:
-            decrement_leader_pid()
             connect_to_leader()
             break
         if not data:
-            decrement_leader_pid()
             connect_to_leader()
             break
 
@@ -72,44 +57,59 @@ def server_communications(stream, stream_pid):
             sender = tokens[0]
             command = tokens[1]
 
-            if sender == "server":
-                if command == "CL" or command == "NL":
-                    pid_param = int(tokens[2])
-                    threading.Thread(target=switch_leader,
-                                    args=(pid_param,), daemon=True).start()
-                    break
-
-def switch_leader(new_leader_pid):
-    set_leader_pid(new_leader_pid)
-    threading.Thread(target=server_communications,
-                args=(servers_list[new_leader_pid],new_leader_pid), daemon=True).start()
-
-def connect_to_leader():
-    global leader_pid
-    print(f"leader_pid = {leader_pid}, servers = {len(servers_list)}")
-    threading.Thread(target=server_communications,
-                args=(servers_list[leader_pid], leader_pid), daemon=True).start()
-
-threading.Thread(target=connect_to_leader, args=()).start()
-
 def input_listener():
-    global inputStreams, blockchain, servers_list, leader_pid, max_servers
+    global leader_stream
     user_input = input()
     while True:
-        if user_input == "whois leader":
-            print(f"I think the leader is server {leader_pid}")
+        if user_input == "leader":
+            print(f"I think the leader is server {leader}")
         else:
+            message = PAYLOAD_DELIMITER.join(user_input.split(" ", 2))
             try:
-                servers_list[leader_pid].sendall(str.encode("client " + user_input))
+                leader_stream.sendall(str.encode("client -> " + message))
             except Exception as e:
-                decrement_leader_pid()
-                connect_to_leader()
+                connection_result = connect_to_leader()
+                if connection_result == None:
+                    break
+
         user_input = input()
 
-threading.Thread(target=input_listener, args=()).start()
+def connect_to_server(pid):
+    print(f"attempting to connect to server {pid}")
+    sock_server_pid = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock_server_pid.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+    connection_result = sock_server_pid.connect_ex((IP,port_base + pid))
+    if connection_result != 0:
+        return None
+    
+    return sock_server_pid
+
+def connect_to_leader():
+    global leader, servers, max_pid
+
+    server_id = max_pid
+    while server_id >= min_pid:
+        leader_stream = connect_to_server(server_id)
+        print(f"connection result = {leader_stream}")
+        if leader_stream != None:
+            set_leader(server_id)
+            set_leader_stream(leader_stream)
+            threading.Thread(target=server_communications,
+            args=(leader_stream, server_id), daemon=True).start()
+            threading.Thread(target=input_listener, args=(), daemon=True).start()
+            return leader_stream
+        server_id -= 1
+    else:
+        print(f"all servers are down")
+        return None
+    
+
+        
+threading.Thread(target=connect_to_leader, args=()).start()
 
 while True:
     try:
         time.sleep(1)
     except KeyboardInterrupt:
-        helpers.handle_exit(servers_list)
+        helpers.handle_exit(leader_stream)

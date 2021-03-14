@@ -1,4 +1,5 @@
 import helpers
+import blockchain as bc
 
 import socket
 import os
@@ -9,145 +10,153 @@ import queue
 import time
 import csv
 
+# Socket Information
 IP = socket.gethostname()
 encoding = 'utf-8'
+PAYLOAD_DELIMITER = " - "
 port_base = 6000
 pid = int(sys.argv[1])  # pid = 1, 2, 3, 4, or 5
 max_clients = 4
 
+# Server data
+temporary_operations = queue.Queue(maxsize=0)
+database = {}
+blockchain = []
+
+# Paxos Information
 leader = pid
 leader_lock = threading.Lock()
+acks = 0
+acks_lock = threading.Lock()
+highest_received_ballot = (0,0)
+highest_received_ballot_lock = threading.Lock()
+highest_received_val = None
+highest_received_val_lock = threading.Lock()
 
 def set_leader(new_leader):
-    global leader
+    global leader, leader_lock
     leader_lock.acquire()
     leader = new_leader
     leader_lock.release()
 
-leader_acks = 0
-leader_acks_lock = threading.Lock()
-
 def increment_acks():
-    global leader_acks
-    leader_acks_lock.acquire()
-    leader_acks += 1
-    leader_acks_lock.release()
+    global acks, acks_lock
+    acks_lock.acquire()
+    acks += 1
+    acks_lock.release()
 
-def set_acks(new_acks):
-    global leader_acks
-    leader_acks_lock.acquire()
-    leader_acks = new_acks
-    leader_acks_lock.release()
+def reset_acks():
+    global acks, acks_lock
+    acks_lock.acquire()
+    acks = 0
+    acks_lock.release()
 
-# sending socket 1
+def set_highest_received_ballot(ballot):
+    global highest_received_ballot, highest_received_ballot_lock
+    highest_received_ballot_lock.acquire()
+    highest_received_ballot = ballot
+    highest_received_ballot_lock.release()
+
+def reset_highest_received_ballot():
+    set_highest_received_ballot((0,0))
+
+def set_highest_received_val(val):
+    global highest_received_val, highest_received_val_lock
+    highest_received_val_lock.acquire()
+    highest_received_val = val
+    highest_received_val_lock.release()
+
+def reset_highest_received_val():
+    set_highest_received_val(None)
+
+ballot_num = (0, pid)
+accept_num = (0, pid)
+accept_val = None
+ballot_num_lock = threading.Lock()
+accept_num_lock = threading.Lock()
+accept_val_lock = threading.Lock()
+
+def increment_ballot_num():
+    global ballot_num, ballot_num_lock
+    ballot_num_lock.acquire()
+    ballot_num = (ballot_num[0] + 1, pid)
+    ballot_num_lock.release()
+
+def set_ballot_num(num):
+    global ballot_num, ballot_num_lock
+    ballot_num_lock.acquire()
+    ballot_num = num
+    ballot_num_lock.release()
+
+def set_accept_num(num):
+    global accept_num, accept_num_lock
+    accept_num_lock.acquire()
+    accept_num = num
+    accept_num_lock.release()
+
+def reset_accept_num():
+    set_accept_num((0,pid))
+
+def set_accept_val(val):
+    global accept_val, accept_val_lock
+    accept_val_lock.acquire()
+    accept_val = val
+    accept_val_lock.release()
+
+def reset_accept_val():
+    set_accept_val(None)
+
+# Outgoing socket 1
 sock_out1 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 sock_out1.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-# sending socket 2
+# Outgoing socket 2
 sock_out2 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 sock_out2.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-# listening socket
+# Incoming socket handles ALL incoming connection requests
 sock_in1 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 sock_in1.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 sock_in1.bind((IP, port_base + pid))
-sock_in1.listen(2)
+sock_in1.listen(20)
 inputStreams = []
 
-broadcast_lock = threading.Lock()
+#######################################################################
+# FUNCTIONS TO SEND MESSAGES
+#######################################################################
+def direct_message(message, stream):
+    helpers.broadcast_message(f"server {pid} -> {message}", [stream])
 
+# could include processor id in message if we needed
+# general broadcasting function prepends [pid] before all messages
 def broadcast_message(message):
-    global inputStreams, sock_out1, sock_out2
-    broadcast_lock.acquire()
+    global sock_out1, sock_out2, inputStreams
+    helpers.broadcast_message(f"server {pid} -> {message}", [sock_out1, sock_out2] + inputStreams)
 
-    time.sleep(0.5)
-    for sock in inputStreams:
-        try:
-            sock.sendall(str.encode(message))
-        except:
-            print(f'failed to send {message} to {sock.getsockname()}', flush=True)
+# ex. prepare - 3,2
+def broadcast_prepare():
+    global ballot_num
+    broadcast_message(f"prepare{PAYLOAD_DELIMITER}{ballot_num[0]},{ballot_num[1]}")
 
-    try:
-        sock_out1.sendall(str.encode(message))
-    except:
-        print(f'failed to send {message} to {sock_out1.getsockname()}', flush=True)
+# ex. promise - 3,2 - 2,2 - put 'hello world'
+def send_promise(stream):
+    global ballot_num, accept_num, accept_val
+    direct_message(f"promise{PAYLOAD_DELIMITER}{ballot_num[0]},{ballot_num[1]}{PAYLOAD_DELIMITER}{accept_num[0]},{accept_num[1]}{PAYLOAD_DELIMITER}{accept_val}", stream)
 
-    try:
-        sock_out2.sendall(str.encode(message))
-    except:
-        print(f'failed to send {message} to {sock_out2.getsockname()}', flush=True)
+# ex. accept - 3,2 - put 'hello world'
+def broadcast_accept():
+    global ballot_num, accept_val
+    broadcast_message(f"accept{PAYLOAD_DELIMITER}{ballot_num[0]},{ballot_num[1]}{PAYLOAD_DELIMITER}{accept_val}")
 
-    broadcast_lock.release()
+# ex. accepted - 3,2 - put 'hello world'
+def send_accepted(stream):
+    global accept_num, accept_val
+    direct_message(f"accepted{PAYLOAD_DELIMITER}{accept_num[0]},{accept_num[1]}{PAYLOAD_DELIMITER}{accept_val}", stream)
 
-# TA how to prioritize
-temporary_operations = queue.PriorityQueue(maxsize=0)
-database = {}
-blockchain = []
-
-# str(Operation) => <put,someKey,someValue>
-# str(Block) => <put,someKey,someValue> someReallyLongHash1283812312 35
-def persist():
-    with open('blockchain.csv', 'w', newline='') as csvfile:
-        fieldnames = ['operations', 'prev_hash', 'nonce']
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-
-        writer.writeheader()
-        for block in blockchain:
-            writer.writerow(block.to_csv())
-        
-        block1 = helpers.Block(helpers.Operation("put", "key1", "value1"), None)
-        block1.mine()
-        block2 = helpers.Block(helpers.Operation("get", "key1", str(None)), block1)
-        block2.mine()
-        writer.writerow(block1.to_csv())
-        writer.writerow(block2.to_csv())
-
-def reconstruct():
-    global blockchain
-    with open('blockchain.csv', newline='') as csvfile:
-        blocks = csv.reader(csvfile, delimiter=',', quotechar='|')
-        firstBlock = True
-        for block in blocks:
-            if firstBlock:
-                firstBlock = False
-                continue
-            operationTokens = (block[0])[1:-1].split(" ")
-            operation = helpers.Operation(operationTokens[0], operationTokens[1], operationTokens[2])
-            blockchain.append(helpers.Block(operation, block[1], block[2]))
-            print(f'Added block: {blockchain[-1]}', flush=True)
-    print(f'Reconstructed blockchain: {blockchain}', flush=True)
-
-def set_current_leader(leader_pid):
-    global leader
-    leader_lock.acquire()
-    leader = leader_pid
-    leader_lock.release()
-
-
-
-leader_stream = None
-leader_stream_lock = threading.Lock()
-def set_leader_stream(stream):
-    global leader_stream
-    leader_stream_lock.acquire()
-    leader_stream = stream
-    leader_stream_lock.release()
-
-# handles RL and CL
-def determine_leader(leader_pid, stream):
-    global leader
-    leader_lock.acquire()
-
-    time.sleep(0.5)
-    if leader_pid > leader:
-        leader = leader_pid
-        set_leader_stream(stream)
-        stream.sendall(str.encode(f"server AL"))
-        print(f"New leader selected: PID = {leader_pid}")
-    elif leader_pid < leader:
-        stream.sendall(str.encode(f"server CL {leader}"))
-    
-    leader_lock.release()
+# ex. decide - 3,2 - put 'hello world'
+def broadcast_decide():
+    global ballot_num, accept_val
+    broadcast_message(f"decide{PAYLOAD_DELIMITER}{ballot_num[0]},{ballot_num[1]}{PAYLOAD_DELIMITER}{accept_val}")
 
 def send_leader_to_client_stream():
     global inputStreams
@@ -161,102 +170,175 @@ def send_client_leader_pid(stream):
     time.sleep(0.5)
     stream.sendall(str.encode(f"server CL {leader}"))
 
+#######################################################################
+# FUNCTIONS TO HANDLE RECEIVED MESSAGES
+#######################################################################
+def handle_received_prepare(received_ballot_num, stream):
+    global ballot_num
+    if received_ballot_num >= ballot_num:
+        set_ballot_num(received_ballot_num)
+        send_promise(stream)
+
+def handle_received_promise(received_accept_num, received_accept_val):
+    global highest_received_ballot
+    if received_accept_num > highest_received_ballot and received_accept_val != "None" and len(received_accept_val) > 0:
+        print(f"received promise with accept_val = {received_accept_val}")
+        set_highest_received_ballot(received_accept_num)
+        set_highest_received_val(received_accept_val)
+    
+    increment_acks()
+
+def handle_received_accept(received_ballot_num, received_accept_val, stream):
+    global ballot_num
+    if received_ballot_num >= ballot_num:
+        set_ballot_num((received_ballot_num[0] + 1, pid))
+        set_accept_num(received_ballot_num)
+        set_accept_val(received_accept_val)
+        send_accepted(stream)
+
+def handle_received_accepted():
+    increment_acks()
+
+def handle_received_decide(received_ballot_num, received_accept_val):
+    set_ballot_num((received_ballot_num[0] + 1, pid))
+    set_accept_num(received_ballot_num)
+    set_accept_val(received_accept_val)
+
 def server_communications(stream):
-    global leader, pid, leader_stream
+    global leader, pid
     addr = stream.getsockname()
     while True:
         data = stream.recv(1024)
-        if not data and leader_stream == stream:
-            set_leader(pid)
-            threading.Thread(target=request_leadership, args=(), daemon=True).start()
-            break
         if data:
             decoded = data.decode(encoding)
-            print(f'Data received ({decoded}) from {addr}', flush=True)
-            tokens = decoded.split(" ", 2)
-            # print(f'Data -> Tokens: {tokens}', flush=True)
-            sender = tokens[0]
-            command = tokens[1]
-            # example command -> client broadcast 'hello world'
+            # print(f'Data received ({decoded}) from {addr}', flush=True)
+            # example received message = server -> payload'
+            tokens = decoded.split(" -> ")
+            sender_tokens = tokens[0].split(" ")
+            sender = sender_tokens[0]
+            payload = tokens[1]
             if sender == "client":
-                if leader != pid:
-                    leader_stream.sendall(data)
-                    stream.sendall(str.encode(f"server NL {leader}"))
-                    break
+                print(f'[client]: {payload}', flush=True)
+                # example payload = put - student_id1 - '858-123-4567'
+                payload_tokens = payload.split(PAYLOAD_DELIMITER)
+                command = payload_tokens[0]
                 if command == "broadcast":
-                    sentence = tokens[2].strip("'")
+                    sentence = payload_tokens[1].strip("'")
                     threading.Thread(target=broadcast_message,
                                     args=(sentence,), daemon=True).start()
-                elif command == "exit":
-                    helpers.handle_exit([inputStreams[0], inputStreams[1], sock_out1, sock_out2])
-                elif command == "persist":
-                    persist()
                 elif command == "put":
-                    key = tokens[2]
-                    value = tokens[3].strip("'")
+                    key = payload_tokens[1]
+                    value = payload_tokens[2].strip("'")
+
+                    threading.Thread(target=begin_leader_election,
+                                    args=(payload,), daemon=True).start()
+
                     database[key] = value
-                    temporary_operations.put(helpers.Operation(command, key, value))
+                    temporary_operations.put(bc.Operation(command, key, value))
                     print(f'Updated database: {database}', flush=True)
                 elif command == "get":
-                    key = tokens[2]
+                    key = payload_tokens[1]
+
+                    threading.Thread(target=begin_leader_election,
+                                    args=(payload,), daemon=True).start()
+
                     print(f'Database value for {key} = {database.get(key)}', flush=True)
-                    temporary_operations.put(helpers.Operation(command, key, None))
+                    temporary_operations.put(bc.Operation(command, key, None))
+                elif command == "persist":
+                    persist()
                 elif command == "reconstruct":
                     reconstruct()
                 elif command == "leader":
                     threading.Thread(target=send_client_leader_pid,
                                     args=(stream,), daemon=True).start()
+                elif command == "exit":
+                    helpers.handle_exit([inputStreams[0], inputStreams[1], sock_out1, sock_out2])
             elif sender == "server":
-                # request leadership
-                if command == "RL":
-                    leader_pid = int(tokens[2])
-                    threading.Thread(target=determine_leader,
-                                    args=(leader_pid,stream), daemon=True).start()
-                # acknowledge leader
-                elif command == "AL":
-                    threading.Thread(target=increment_acks, args=(), daemon=True).start()
-                # new leader was chosen
-                elif command == "NL":
-                    leader_pid = int(tokens[2])
-                    threading.Thread(target=determine_leader,
-                                    args=(leader_pid,stream), daemon=True).start()
-                # current leader
-                elif command == "CL":
-                    leader_pid = int(tokens[2])
-                    if(leader < leader_pid):
-                        threading.Thread(target=determine_leader,
-                                        args=(leader_pid,stream), daemon=True).start()
+                sender_pid = sender_tokens[1]
+                print(f'[{sender_pid}]: {payload}', flush=True)
+                # example payload = promise - 3,2, - 2,2 - put 'hello world'
+                payload_tokens = payload.split(PAYLOAD_DELIMITER)
+                command = payload_tokens[0]
+                if command == "prepare":
+                    received_ballot_num = tuple(int(e) for e in payload_tokens[1].split(","))
+
+                    threading.Thread(target=handle_received_prepare,
+                                    args=(received_ballot_num,stream), daemon=True).start()
+                elif command == "promise":
+                    received_ballot_num = tuple(int(e) for e in payload_tokens[1].split(","))
+                    received_accept_num = tuple(int(e) for e in payload_tokens[2].split(","))
+                    received_accept_val = PAYLOAD_DELIMITER.join(payload_tokens[3:-1])
+                    threading.Thread(target=handle_received_promise,
+                                    args=(received_accept_num,received_accept_val), daemon=True).start()
+                elif command == "accept":
+                    print(f"payload tokens: {payload_tokens}")
+                    received_ballot_num = tuple(int(e) for e in payload_tokens[1].split(","))
+                    received_accept_val = PAYLOAD_DELIMITER.join(payload_tokens[2:-1])
+
+                    threading.Thread(target=handle_received_accept,
+                                    args=(received_ballot_num,received_accept_val, stream), daemon=True).start()
+                elif command == "accepted":
+                    threading.Thread(target=handle_received_accepted,
+                                    args=(), daemon=True).start()
+                elif command == "decide":
+                    received_ballot_num = tuple(int(e) for e in payload_tokens[1].split(","))
+                    received_accept_val = payload_tokens[2]
+                    threading.Thread(target=handle_received_decide,
+                                    args=(received_ballot_num, received_accept_val), daemon=True).start()
         else:
             break
 
+#######################################################################
+# LEADER ELECTION 
+# 1. Server is alive
+# 2. If server receives message from client, begin leader election
+#######################################################################
+def begin_leader_election(proposed_value):
+    global acks, ballot_num, accept_val, highest_received_val
+
+    set_accept_val(proposed_value)
+    print(f"set {proposed_value} as accept_val")
+    increment_ballot_num()
+
+    # phase 1
+    broadcast_prepare()
+    timeout_time = time.time() + 5  # timeout after 5 seconds
+    while (acks < max_clients / 2):
+        if time.time() >= timeout_time:
+            print(f"ballot {ballot_num} timed out during phase 1")
+            return
+
+    # phase 2
+    # ballot recovery
+    if highest_received_val != None:
+        print(f"recovered {highest_received_val} from previous paxos sequence")
+        set_accept_val(highest_received_val)
+
+    reset_acks()
+    broadcast_accept()
+    timeout_time = time.time() + 5  # timeout after 5 seconds
+    while (acks < max_clients / 2):
+        if time.time() >= timeout_time:
+            print(f"ballot {ballot_num} timed out during phase 2")
+            return
+
+    # phase 3
+    broadcast_decide()
+
+    # reset
+
+# accept any incoming socket connection and create a thread to handle communication on this new stream
 def accept_connections():
     global leader
-    # helpers.print_expecting_connections(pid, port_base)
     while True:
         stream, addr = sock_in1.accept()
         inputStreams.append(stream)
         print(f'Connected to {addr}', flush=True)
-        stream.sendall(str.encode(f"server NL {leader}"))
         threading.Thread(target=server_communications,
                          args=(stream,), daemon=True).start()
 
-#sock_out1, sock_out2, inputStreams
-def request_leadership():
-    global leader, pid, leader_acks
-
-    ack_wait = 0
-    while (leader_acks < max_clients / 2):
-        # print(f"leader_acks = {leader_acks}, max_clients/2 = {max_clients/2}")
-        if leader > pid:
-            return
-        ack_wait += 1
-
-        broadcast_message(f"server RL {pid}")
-        time.sleep(1)
-        # maybe sleep after awhile
-
-    broadcast_message(f"server NL {pid}")
-
+# send out 2 connection requests as dictated by the connection scheme in helpers.py
+# keep sending connection requests until a stream is created and then handle the communication of that stream in a new thread
 def send_connections():
     out_addr1, out_addr2 = helpers.get_output_connection_tuples(pid, IP, port_base)
     sock_out1_result = None
@@ -270,11 +352,10 @@ def send_connections():
         if sock_out2_result == 0:
             threading.Thread(target=server_communications,
                      args=(sock_out2,), daemon=True).start()
-
+        time.sleep(1)
 
 threading.Thread(target=accept_connections, args=()).start()
 threading.Thread(target=send_connections, args=()).start()
-threading.Thread(target=request_leadership, args=()).start()
 
 while True:
     try:
