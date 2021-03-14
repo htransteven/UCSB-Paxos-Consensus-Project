@@ -5,8 +5,8 @@ import time
 
 PAYLOAD_DELIMITER = " - "
 
-def broadcast_message(message, streams):
-    time.sleep(0.2)
+def broadcast_message(message, streams, delay):
+    time.sleep(delay)
     for s in streams:
         try:
             s.sendall(str.encode(message))
@@ -17,6 +17,8 @@ def handle_exit(sockets):
     print(f'\nExiting program...', flush=True)
     sys.stdout.flush()
     for s in sockets:
+        if s == None:
+            continue
         print(f'Closed socket {s.getsockname()[1]}', flush=True)
         s.close()
     os._exit(0)

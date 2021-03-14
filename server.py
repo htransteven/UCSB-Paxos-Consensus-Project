@@ -43,6 +43,9 @@ def set_blockchain(chain):
     blockchain = chain
     blockchain_lock.release()
 
+def reset_blockchain():
+    set_blockchain([])
+
 def append_to_blockchain(block):
     global database, blockchain, blockchain_lock
     blockchain_lock.acquire()
@@ -129,6 +132,18 @@ def set_accept_val(val):
 def reset_accept_val():
     set_accept_val(None)
 
+def get_object_string(obj):
+    return f"{obj}".replace(",", "\n").replace("{", "{\n ").replace("}", "\n}")
+
+def get_state_string():
+    global ballot_num, accept_num, accept_val, broken_streams, acks
+    result = f"Ballot Num: {ballot_num}\n"
+    result += f"Accept Num: {accept_num}\n"
+    result += f"Accept Val: {accept_val}\n"
+    result += f"Connection Status: \n{get_object_string(broken_streams)}\n"
+    result += f"Acknowledgements: {acks}\n"
+    return result
+
 # Outgoing socket 1
 sock_out1 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 sock_out1.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -147,14 +162,14 @@ inputStreams = []
 #######################################################################
 # FUNCTIONS TO SEND MESSAGES
 #######################################################################
-def direct_message(message, stream):
-    helpers.broadcast_message(f"server {pid} -> {message}", [stream])
+def direct_message(message, stream, delay = 0.5):
+    helpers.broadcast_message(f"server {pid} -> {message}", [stream], delay)
 
 # could include processor id in message if we needed
 # general broadcasting function prepends [pid] before all messages
-def broadcast_message(message):
+def broadcast_message(message, delay = 0.5):
     global sock_out1, sock_out2, inputStreams
-    helpers.broadcast_message(f"server {pid} -> {message}", [sock_out1, sock_out2] + inputStreams)
+    helpers.broadcast_message(f"server {pid} -> {message}", [sock_out1, sock_out2] + inputStreams, delay)
 
 # ex. prepare - 3,2
 def broadcast_prepare():
@@ -193,7 +208,7 @@ def handle_received_failLink(src, dest):
 def handle_received_fixLink(src,dest):
     global pid
     if pid == dest:
-        print(f"[{dest}] --- fixed stream ---- [{src}]")
+        print(f"[{dest}] ---- fixed stream ----- [{src}]")
         update_broken_streams(src, False)
 
 # Begin Paxos functions
@@ -212,13 +227,24 @@ def handle_received_promise(received_accept_num, received_accept_val):
     increment_acks()
 
 def handle_received_accept(received_ballot_num, received_accept_val, stream):
-    global ballot_num
+    global blockchain, ballot_num
     if received_ballot_num >= ballot_num:
         set_ballot_num((received_ballot_num[0] + 1, pid))
         set_accept_num(received_ballot_num)
+        print(f"received new block RAW: {received_accept_val}")
         block = bc.parse_block_from_payload(received_accept_val)
-        set_accept_val(block)
-        append_to_blockchain(block)
+        print(f"received new block: {block}")
+        print(f"received new block, prev_hash: {block.prev_hash}")
+        if len(blockchain) > 0:
+            print(f"tail block: {blockchain[-1]}")
+            print(f"tail block hash: {bc.hash_block(blockchain[-1])}")
+        
+        if len(blockchain) > 0 and block.prev_hash != bc.hash_block(blockchain[-1]):
+            # this server is out of sync and behind, ask leader for up-to-date blockchain
+            direct_message(f"blockchain{PAYLOAD_DELIMITER}sync-request", stream)
+        else:
+            set_accept_val(block)
+            append_to_blockchain(block)
 
         send_accepted(stream)
 
@@ -227,23 +253,33 @@ def handle_received_accepted():
 
 def handle_received_decide(received_ballot_num, received_accept_val):
     global accept_num
-    if (received_ballot_num == accept_num):
-        return
     
     set_ballot_num((received_ballot_num[0] + 1, pid))
     set_accept_num(received_ballot_num)
 
     block = bc.parse_block_from_payload(received_accept_val)
+    
+    if len(blockchain) > 0 and bc.hash_block(blockchain[-1]) == bc.hash_block(block):
+        reset_accept_num()
+        reset_accept_val()
+        return
+
     set_accept_val(block)
     append_to_blockchain(block)
+    reset_accept_num()
+    reset_accept_val()
 # End Paxos functions
 
-def handle_blockchain_reconstruct():
-    global pid, blockchain
-
-    persisted_blockchain = bc.reconstruct(pid)
+def handle_blockchain_reconstruct(id = pid, callback = None):
+    global blockchain
+    
+    reset_blockchain()
+    persisted_blockchain = bc.reconstruct(id)
     for b in persisted_blockchain:
         append_to_blockchain(b)
+    
+    if callback:
+        callback()
 
 def handle_operations_queue():
     global temporary_operations
@@ -290,15 +326,17 @@ def server_communications(stream):
                     sentence = payload_tokens[1].strip("'")
                     threading.Thread(target=broadcast_message,
                                     args=(sentence,), daemon=True).start()
-                elif command == "put":
+                    payload_tokens = sentence.split(PAYLOAD_DELIMITER)
+                    command = payload_tokens[0]
+                if command == "put":
                     key = payload_tokens[1]
                     value = payload_tokens[2].strip("'")
 
-                    temporary_operations.put((bc.Operation(command, key, value), handle_put_callback(stream)))
+                    temporary_operations.put((bc.Operation(cmd=command, key=key, value=value), handle_put_callback(stream)))
                 elif command == "get":
                     key = payload_tokens[1]
 
-                    temporary_operations.put((bc.Operation(command, key, None), handle_get_callback(stream)))
+                    temporary_operations.put((bc.Operation(cmd=command, key=key, value=None), handle_get_callback(stream)))
                 elif command == "persist":
                     threading.Thread(target=bc.persist,
                                     args=(pid, blockchain), daemon=True).start()
@@ -308,9 +346,11 @@ def server_communications(stream):
                 elif command == "exit":
                     helpers.handle_exit([inputStreams[0], inputStreams[1], sock_out1, sock_out2])
                 elif command == "blockchain":
-                    print(f"Blockchain: {bc.print_blockchain(blockchain)}")
+                    print(f"----- Blockchain Head -----\n{bc.print_blockchain(blockchain)}----- Blockchain Tail -----")
                 elif command == "database":
                     print(f"Database: {database}")
+                elif command == "state":
+                    print(f"----- State -----\n{get_state_string()}-----------------")
             elif sender == "server":
                 sender_pid = int(sender_tokens[1])
                 # example payload = promise - 3,2, - 2,2 - put 'hello world'
@@ -366,9 +406,27 @@ def server_communications(stream):
                     threading.Thread(target=handle_blockchain_reconstruct,
                                     args=(), daemon=True).start()
                 elif command == "blockchain":
-                    print(f"Blockchain: {bc.print_blockchain(blockchain)}")
+                    print(f"blockchain tokens: {payload_tokens}")
+                    if len(payload_tokens) > 1:
+                        action = payload_tokens[1]
+                        if action == "sync-request":
+                            # persist blockchain data and send ready to other server to sync
+                            def callback():
+                                direct_message(f"blockchain{PAYLOAD_DELIMITER}sync-ready", stream)
+                            threading.Thread(target=bc.persist,
+                                            args=(pid, blockchain, callback), daemon=True).start()
+                        elif action == "sync-ready":
+                            def callback():
+                                if accept_val:
+                                    append_to_blockchain(accept_val)
+                            threading.Thread(target=handle_blockchain_reconstruct,
+                                            args=(sender_pid,callback), daemon=True).start()
+                    else:
+                        print(f"----- Blockchain Head -----\n{bc.print_blockchain(blockchain)}----- Blockchain Tail -----")
                 elif command == "database":
                     print(f"Database: {database}")
+                elif command == "state":
+                    print(f"----- State -----\n{get_state_string()}-----------------")
         else:
             break
 
@@ -378,7 +436,9 @@ def server_communications(stream):
 # 2. If server receives message from client, begin leader election
 #######################################################################
 def begin_paxos(proposed_operation, callback):
-    global acks, ballot_num, accept_val, highest_received_val
+    global blockchain, acks, ballot_num, accept_val, highest_received_val
+
+    increment_ballot_num()
 
     # phase 1
     broadcast_prepare()
@@ -392,17 +452,17 @@ def begin_paxos(proposed_operation, callback):
     prev_block = None
     if len(blockchain) > 0:
         prev_block = blockchain[-1]
-    block = bc.Block(operation, prev_block)
+    block = bc.Block(op=operation, prev_block=prev_block)
     block.mine()
-
-    set_accept_val(block)
-    increment_ballot_num()
+    print(f"new block, prev_hash = {block.prev_hash}")
 
     # phase 2
     # ballot recovery
     if highest_received_val != None:
         print(f"recovered {highest_received_val} from previous paxos sequence")
-        set_accept_val(bc.parse_block_from_payload(highest_received_val))
+        block = bc.parse_block_from_payload(highest_received_val)
+
+    set_accept_val(block)
 
     reset_acks()
     broadcast_accept()
@@ -418,8 +478,11 @@ def begin_paxos(proposed_operation, callback):
     broadcast_decide()
 
     # reset
+    reset_acks()
+    reset_highest_received_ballot()
+    reset_highest_received_val()
 
-    callback(accept_val)
+    callback(block)
 
 # accept any incoming socket connection and create a thread to handle communication on this new stream
 def accept_connections():
@@ -448,11 +511,13 @@ def send_connections():
         time.sleep(1)
 
 def handle_failLink(src, dest):
-    broadcast_message(f"failLink{PAYLOAD_DELIMITER}{src}{PAYLOAD_DELIMITER}{dest}")
+    broadcast_message(f"failLink{PAYLOAD_DELIMITER}{src}{PAYLOAD_DELIMITER}{dest}", 0)
+    handle_received_failLink(dest, src)
     update_broken_streams(dest, True)
 
 def handle_fixLink(src, dest):
-    broadcast_message(f"fixLink{PAYLOAD_DELIMITER}{src}{PAYLOAD_DELIMITER}{dest}")
+    broadcast_message(f"fixLink{PAYLOAD_DELIMITER}{src}{PAYLOAD_DELIMITER}{dest}", 0)
+    handle_received_fixLink(dest, src)
     update_broken_streams(dest, False)
 
 def input_listener():
@@ -472,7 +537,11 @@ def input_listener():
             threading.Thread(target=handle_fixLink,
                      args=(src, dest), daemon=True).start()
         elif command == "blockchain":
-            print(f"Blockchain: {bc.print_blockchain(blockchain)}")
+            if len(tokens) > 1:
+                block_index = int(tokens[1])
+                print(f"Block [{block_index}]: {blockchain[block_index]}")
+            else:
+                print(f"Blockchain: {bc.print_blockchain(blockchain)}")
         user_input = input()
 
 threading.Thread(target=accept_connections, args=()).start()

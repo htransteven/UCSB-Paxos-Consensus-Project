@@ -109,6 +109,7 @@ def connect_to_leader():
         server_id -= 1
     else:
         print(f"all servers are down")
+        helpers.handle_exit([leader_stream])
         return None
     
 
@@ -119,4 +120,4 @@ while True:
     try:
         time.sleep(1)
     except KeyboardInterrupt:
-        helpers.handle_exit(leader_stream)
+        helpers.handle_exit([leader_stream])

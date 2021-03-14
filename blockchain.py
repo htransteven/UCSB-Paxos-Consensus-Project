@@ -6,7 +6,7 @@ import os
 from hashlib import sha256
 
 def print_blockchain(blockchain):
-    result = "\n"
+    result = ""
     index = 0
     while index < len(blockchain):
         b = blockchain[index]
@@ -17,15 +17,16 @@ def print_blockchain(blockchain):
 # ex. payload put - key - value - hash - nonce
 def parse_block_from_payload(payload):
     payload_tokens = payload.split(PAYLOAD_DELIMITER)
-    op = Operation(payload_tokens[0], payload_tokens[1], payload_tokens[2])
-    block = Block(op, payload_tokens[3], payload_tokens[4])
+    print(f"tokens from payload: {payload_tokens}")
+    op = Operation(cmd=payload_tokens[0], key=payload_tokens[1], value=payload_tokens[2])
+    block = Block(op=op, prev_hash=payload_tokens[3], nonce=payload_tokens[4])
     return block
 
 def get_file_name(pid):
     return f"blockchain_p{pid}.csv"
 
 # stores array of blocks in csv format
-def persist(pid, blockchain):
+def persist(pid, blockchain, callback = None):
     file_name = get_file_name(pid)
     with open(file_name, 'w', newline='') as csvfile:
         fieldnames = ['operations', 'prev_hash', 'nonce']
@@ -34,6 +35,9 @@ def persist(pid, blockchain):
         # writer.writeheader()
         for block in blockchain:
             writer.writerow(block.to_csv())
+    
+    if callback:
+        callback()
 
 # returns array of blocks
 def reconstruct(pid):
@@ -43,13 +47,9 @@ def reconstruct(pid):
         blocks = csv.reader(csvfile, delimiter=',', quotechar='|')
         firstBlock = True
         for block in blocks:
-            # ignore header row
-            if firstBlock:
-                firstBlock = False
-                continue
             operationTokens = block[0].split(PAYLOAD_DELIMITER)
-            operation = Operation(operationTokens[0], operationTokens[1], operationTokens[2])
-            blockchain.append(Block(operation, block[1], block[2]))
+            operation = Operation(cmd=operationTokens[0], key=operationTokens[1], value=operationTokens[2])
+            blockchain.append(Block(op=operation, prev_hash=block[1], nonce=block[2]))
     return blockchain
 
 def is_valid_nonce(char):
@@ -58,12 +58,17 @@ def is_valid_nonce(char):
     else:
         return False
 
+def hash_block(block):
+    return sha256(str(block).encode('utf-8')).hexdigest()
+
 # str(Block) => <put,someKey,someValue> someReallyLongHash1283812312 35
 class Block:
-    def __init__(self, op, prev_block = None, nonce = None):
+    def __init__(self, op, prev_block = None, prev_hash = None, nonce = None):
         self.operation = op
-        if prev_block != None:
-            self.prev_hash = sha256(str(prev_block).encode('utf-8')).hexdigest()
+        if prev_hash != None and prev_hash != "None":
+            self.prev_hash = prev_hash
+        elif prev_block != None and prev_block != "None":
+            self.prev_hash = hash_block(prev_block)
         else:
             self.prev_hash = None
         self.nonce = nonce
