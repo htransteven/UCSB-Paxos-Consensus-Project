@@ -47,11 +47,9 @@ def reconstruct(pid):
             if firstBlock:
                 firstBlock = False
                 continue
-            operationTokens = (block[0])[1:-1].split(" ")
+            operationTokens = block[0].split(PAYLOAD_DELIMITER)
             operation = Operation(operationTokens[0], operationTokens[1], operationTokens[2])
             blockchain.append(Block(operation, block[1], block[2]))
-            # print(f'Added block: {blockchain[-1]}', flush=True)
-    # print(f'Reconstructed blockchain: {blockchain}', flush=True)
     return blockchain
 
 def is_valid_nonce(char):

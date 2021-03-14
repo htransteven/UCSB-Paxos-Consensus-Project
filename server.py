@@ -37,6 +37,12 @@ database = {}
 blockchain = []
 blockchain_lock = threading.Lock()
 
+def set_blockchain(chain):
+    global blockchain, blockchain_lock
+    blockchain_lock.acquire()
+    blockchain = chain
+    blockchain_lock.release()
+
 def append_to_blockchain(block):
     global blockchain, blockchain_lock
     blockchain_lock.acquire()
@@ -227,6 +233,12 @@ def handle_received_decide(received_ballot_num, received_accept_val):
     append_to_blockchain(block)
 # End Paxos functions
 
+def handle_blockchain_reconstruct():
+    global pid, blockchain
+
+    persisted_blockchain = bc.reconstruct(pid)
+    set_blockchain(persisted_blockchain)
+
 def server_communications(stream):
     global pid, blockchain, broken_streams
     addr = stream.getsockname()
@@ -268,10 +280,12 @@ def server_communications(stream):
                     threading.Thread(target=bc.persist,
                                     args=(pid, blockchain), daemon=True).start()
                 elif command == "reconstruct":
-                    threading.Thread(target=bc.reconstruct,
-                                    args=(pid), daemon=True).start()
+                    threading.Thread(target=handle_blockchain_reconstruct,
+                                    args=(), daemon=True).start()
                 elif command == "exit":
                     helpers.handle_exit([inputStreams[0], inputStreams[1], sock_out1, sock_out2])
+                elif command == "blockchain":
+                    print(f"Blockchain: {bc.print_blockchain(blockchain)}")
             elif sender == "server":
                 sender_pid = int(sender_tokens[1])
                 # example payload = promise - 3,2, - 2,2 - put 'hello world'
@@ -324,8 +338,10 @@ def server_communications(stream):
                     threading.Thread(target=bc.persist,
                                     args=(pid, blockchain), daemon=True).start()
                 elif command == "reconstruct":
-                    threading.Thread(target=bc.reconstruct,
-                                    args=(pid), daemon=True).start()
+                    threading.Thread(target=handle_blockchain_reconstruct,
+                                    args=(), daemon=True).start()
+                elif command == "blockchain":
+                    print(f"Blockchain: {bc.print_blockchain(blockchain)}")
         else:
             break
 
