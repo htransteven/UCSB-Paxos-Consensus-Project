@@ -1,3 +1,24 @@
+import helpers
+from helpers import PAYLOAD_DELIMITER
+
+from hashlib import sha256
+
+def print_blockchain(blockchain):
+    result = "\n"
+    index = 0
+    while index < len(blockchain):
+        b = blockchain[index]
+        result += f"[{index}] {b.operation.operation} {b.operation.key} {b.operation.value}\n"
+        index += 1
+    return result
+
+# ex. payload put - key - value - hash - nonce
+def parse_block_from_payload(payload):
+    payload_tokens = payload.split(PAYLOAD_DELIMITER)
+    op = Operation(payload_tokens[0], payload_tokens[1], payload_tokens[2])
+    block = Block(op, payload_tokens[3], payload_tokens[4])
+    return block
+
 def get_file_name(pid):
     return 'blockchain' + '_p' + pid + '.csv'
 
@@ -25,8 +46,8 @@ def reconstruct(pid):
                 firstBlock = False
                 continue
             operationTokens = (block[0])[1:-1].split(" ")
-            operation = helpers.Operation(operationTokens[0], operationTokens[1], operationTokens[2])
-            blockchain.append(helpers.Block(operation, block[1], block[2]))
+            operation = Operation(operationTokens[0], operationTokens[1], operationTokens[2])
+            blockchain.append(Block(operation, block[1], block[2]))
             # print(f'Added block: {blockchain[-1]}', flush=True)
     # print(f'Reconstructed blockchain: {blockchain}', flush=True)
     return blockchain
@@ -39,7 +60,7 @@ def is_valid_nonce(char):
 
 # str(Block) => <put,someKey,someValue> someReallyLongHash1283812312 35
 class Block:
-    def __init__(self, op, prev_block, nonce = None):
+    def __init__(self, op, prev_block = None, nonce = None):
         self.operation = op
         if prev_block != None:
             self.prev_hash = sha256(str(prev_block).encode('utf-8')).hexdigest()
@@ -60,7 +81,7 @@ class Block:
         return {'operations': str(self.operation), 'prev_hash': str(self.prev_hash), 'nonce': str(self.nonce)}
 
     def __str__(self):
-        return str(self.operation) + " " + str(self.prev_hash) + " " + str(self.nonce)
+        return str(self.operation) + helpers.PAYLOAD_DELIMITER + str(self.prev_hash) + helpers.PAYLOAD_DELIMITER + str(self.nonce)
 
 # str(Operation) => <put,someKey,someValue>
 class Operation:
@@ -70,4 +91,4 @@ class Operation:
         self.value = value
         
     def __str__(self):
-     return "<" + str(self.operation) + " " + str(self.key) + " " + str(self.value) + ">"
+     return str(self.operation) + helpers.PAYLOAD_DELIMITER + str(self.key) + helpers.PAYLOAD_DELIMITER + str(self.value)

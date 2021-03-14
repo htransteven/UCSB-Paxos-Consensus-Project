@@ -1,4 +1,6 @@
 import helpers
+from helpers import PAYLOAD_DELIMITER
+
 import socket
 import os
 import csv
@@ -10,7 +12,6 @@ import csv
 
 IP = socket.gethostname()
 encoding = 'utf-8'
-PAYLOAD_DELIMITER = " - "
 port_base = 6000
 min_pid = 1
 max_pid = 5

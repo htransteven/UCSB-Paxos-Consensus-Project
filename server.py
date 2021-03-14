@@ -1,4 +1,5 @@
 import helpers
+from helpers import PAYLOAD_DELIMITER
 import blockchain as bc
 
 import socket
@@ -13,7 +14,6 @@ import csv
 # Socket Information
 IP = socket.gethostname()
 encoding = 'utf-8'
-PAYLOAD_DELIMITER = " - "
 port_base = 6000
 pid = int(sys.argv[1])  # pid = 1, 2, 3, 4, or 5
 max_clients = 4
@@ -37,6 +37,13 @@ def update_broken_streams(server_id, status):
 temporary_operations = queue.Queue(maxsize=0)
 database = {}
 blockchain = []
+blockchain_lock = threading.Lock()
+
+def append_to_blockchain(block):
+    global blockchain, blockchain_lock
+    blockchain_lock.acquire()
+    blockchain.append(block)
+    blockchain_lock.release()
 
 # Paxos Information
 acks = 0
@@ -170,14 +177,14 @@ def broadcast_decide():
 #######################################################################
 def handle_received_failLink(src, dest):
     global pid
-    print(f"received failLink command from {src}")
     if pid == dest:
-        print(f"breaking link with {src}")
+        print(f"[{dest}] --- // broken stream // --- [{src}]")
         update_broken_streams(src, True)
 
 def handle_received_fixLink(src,dest):
     global pid
     if pid == dest:
+        print(f"[{dest}] ----- fixed stream ----- [{src}]")
         update_broken_streams(src, False)
 
 # Begin Paxos functions
@@ -190,7 +197,6 @@ def handle_received_prepare(received_ballot_num, stream):
 def handle_received_promise(received_accept_num, received_accept_val):
     global highest_received_ballot
     if received_accept_num > highest_received_ballot and received_accept_val != "None" and len(received_accept_val) > 0:
-        print(f"received promise with accept_val = {received_accept_val}")
         set_highest_received_ballot(received_accept_num)
         set_highest_received_val(received_accept_val)
     
@@ -201,16 +207,26 @@ def handle_received_accept(received_ballot_num, received_accept_val, stream):
     if received_ballot_num >= ballot_num:
         set_ballot_num((received_ballot_num[0] + 1, pid))
         set_accept_num(received_ballot_num)
-        set_accept_val(received_accept_val)
+        block = bc.parse_block_from_payload(received_accept_val)
+        set_accept_val(block)
+        append_to_blockchain(block)
+
         send_accepted(stream)
 
 def handle_received_accepted():
     increment_acks()
 
 def handle_received_decide(received_ballot_num, received_accept_val):
+    global accept_num
+    if (received_ballot_num == accept_num):
+        return
+    
     set_ballot_num((received_ballot_num[0] + 1, pid))
     set_accept_num(received_ballot_num)
-    set_accept_val(received_accept_val)
+
+    block = bc.parse_block_from_payload(received_accept_val)
+    set_accept_val(block)
+    append_to_blockchain(block)
 # End Paxos functions
 
 def server_communications(stream):
@@ -239,19 +255,16 @@ def server_communications(stream):
                     key = payload_tokens[1]
                     value = payload_tokens[2].strip("'")
 
-                    threading.Thread(target=begin_leader_election,
+                    threading.Thread(target=begin_paxos,
                                     args=(payload,), daemon=True).start()
 
                     database[key] = value
                     temporary_operations.put(bc.Operation(command, key, value))
-                    print(f'Updated database: {database}', flush=True)
                 elif command == "get":
                     key = payload_tokens[1]
 
-                    threading.Thread(target=begin_leader_election,
+                    threading.Thread(target=begin_paxos,
                                     args=(payload,), daemon=True).start()
-
-                    print(f'Database value for {key} = {database.get(key)}', flush=True)
                     temporary_operations.put(bc.Operation(command, key, None))
                 elif command == "persist":
                     persist()
@@ -288,13 +301,13 @@ def server_communications(stream):
                 elif command == "promise":
                     received_ballot_num = tuple(int(e) for e in payload_tokens[1].split(","))
                     received_accept_num = tuple(int(e) for e in payload_tokens[2].split(","))
-                    received_accept_val = PAYLOAD_DELIMITER.join(payload_tokens[3:-1])
+                    received_accept_val = PAYLOAD_DELIMITER.join(payload_tokens[3:])
+
                     threading.Thread(target=handle_received_promise,
                                     args=(received_accept_num,received_accept_val), daemon=True).start()
                 elif command == "accept":
-                    print(f"payload tokens: {payload_tokens}")
                     received_ballot_num = tuple(int(e) for e in payload_tokens[1].split(","))
-                    received_accept_val = PAYLOAD_DELIMITER.join(payload_tokens[2:-1])
+                    received_accept_val = PAYLOAD_DELIMITER.join(payload_tokens[2:])
 
                     threading.Thread(target=handle_received_accept,
                                     args=(received_ballot_num,received_accept_val, stream), daemon=True).start()
@@ -303,7 +316,8 @@ def server_communications(stream):
                                     args=(), daemon=True).start()
                 elif command == "decide":
                     received_ballot_num = tuple(int(e) for e in payload_tokens[1].split(","))
-                    received_accept_val = payload_tokens[2]
+                    received_accept_val = PAYLOAD_DELIMITER.join(payload_tokens[2:])
+
                     threading.Thread(target=handle_received_decide,
                                     args=(received_ballot_num, received_accept_val), daemon=True).start()
         else:
@@ -314,12 +328,8 @@ def server_communications(stream):
 # 1. Server is alive
 # 2. If server receives message from client, begin leader election
 #######################################################################
-def begin_leader_election(proposed_value):
+def begin_paxos(proposed_value):
     global acks, ballot_num, accept_val, highest_received_val
-
-    set_accept_val(proposed_value)
-    print(f"set {proposed_value} as accept_val")
-    increment_ballot_num()
 
     # phase 1
     broadcast_prepare()
@@ -329,11 +339,27 @@ def begin_leader_election(proposed_value):
             print(f"ballot {ballot_num} timed out during phase 1")
             return
 
+    # received majority of promise messages, begin mining block to send as accept_val
+    payload_tokens = proposed_value.split(PAYLOAD_DELIMITER)
+    command = payload_tokens[0]
+    key = payload_tokens[1]
+    value = payload_tokens[2]
+
+    operation = bc.Operation(command, key, value)
+    prev_block = None
+    if len(blockchain) > 0:
+        prev_block = blockchain[-1]
+    block = bc.Block(operation, prev_block)
+    block.mine()
+
+    set_accept_val(block)
+    increment_ballot_num()
+
     # phase 2
     # ballot recovery
     if highest_received_val != None:
         print(f"recovered {highest_received_val} from previous paxos sequence")
-        set_accept_val(highest_received_val)
+        set_accept_val(bc.parse_block_from_payload(highest_received_val))
 
     reset_acks()
     broadcast_accept()
@@ -342,6 +368,8 @@ def begin_leader_election(proposed_value):
         if time.time() >= timeout_time:
             print(f"ballot {ballot_num} timed out during phase 2")
             return
+    
+    append_to_blockchain(accept_val)
 
     # phase 3
     broadcast_decide()
@@ -383,7 +411,7 @@ def handle_fixLink(src, dest):
     update_broken_streams(dest, False)
 
 def input_listener():
-    global leader_stream
+    global blockchain
     user_input = input()
     while True:
         tokens = user_input.split(" ")
@@ -398,6 +426,8 @@ def input_listener():
             dest = int(tokens[2])
             threading.Thread(target=handle_fixLink,
                      args=(src, dest), daemon=True).start()
+        elif command == "blockchain":
+            print(f"Blockchain: {bc.print_blockchain(blockchain)}")
         user_input = input()
 
 threading.Thread(target=accept_connections, args=()).start()

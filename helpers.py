@@ -2,7 +2,8 @@ import sys
 import os
 import struct
 import time
-from hashlib import sha256
+
+PAYLOAD_DELIMITER = " - "
 
 def broadcast_message(message, streams):
     time.sleep(0.2)
