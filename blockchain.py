@@ -10,7 +10,7 @@ def print_blockchain(blockchain):
     index = 0
     while index < len(blockchain):
         b = blockchain[index]
-        result += f"[{index}] {b.operation.operation} {b.operation.key} {b.operation.value}\n"
+        result += f"[{index}] {b.operation.command} {b.operation.key} {b.operation.value}\n"
         index += 1
     return result
 
@@ -85,10 +85,10 @@ class Block:
 
 # str(Operation) => <put,someKey,someValue>
 class Operation:
-    def __init__(self, op, key, value):
-        self.operation = op
+    def __init__(self, cmd, key, value):
+        self.command = cmd
         self.key = key
         self.value = value
         
     def __str__(self):
-     return str(self.operation) + helpers.PAYLOAD_DELIMITER + str(self.key) + helpers.PAYLOAD_DELIMITER + str(self.value)
+     return str(self.command) + helpers.PAYLOAD_DELIMITER + str(self.key) + helpers.PAYLOAD_DELIMITER + str(self.value)

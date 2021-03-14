@@ -44,8 +44,13 @@ def set_blockchain(chain):
     blockchain_lock.release()
 
 def append_to_blockchain(block):
-    global blockchain, blockchain_lock
+    global database, blockchain, blockchain_lock
     blockchain_lock.acquire()
+
+    print(f"Appending block: {block.operation}")
+    if block.operation.command == "put":
+        database[block.operation.key] = block.operation.value
+
     blockchain.append(block)
     blockchain_lock.release()
 
@@ -182,13 +187,13 @@ def broadcast_decide():
 def handle_received_failLink(src, dest):
     global pid
     if pid == dest:
-        print(f"[{dest}] --- // broken stream // --- [{src}]")
+        print(f"[{dest}] --// broken stream //-- [{src}]")
         update_broken_streams(src, True)
 
 def handle_received_fixLink(src,dest):
     global pid
     if pid == dest:
-        print(f"[{dest}] ----- fixed stream ----- [{src}]")
+        print(f"[{dest}] --- fixed stream ---- [{src}]")
         update_broken_streams(src, False)
 
 # Begin Paxos functions
@@ -237,10 +242,11 @@ def handle_blockchain_reconstruct():
     global pid, blockchain
 
     persisted_blockchain = bc.reconstruct(pid)
-    set_blockchain(persisted_blockchain)
+    for b in persisted_blockchain:
+        append_to_blockchain(b)
 
 def server_communications(stream):
-    global pid, blockchain, broken_streams
+    global pid, blockchain, database, broken_streams
     addr = stream.getsockname()
     while True:
         data = stream.recv(1024)
@@ -286,6 +292,8 @@ def server_communications(stream):
                     helpers.handle_exit([inputStreams[0], inputStreams[1], sock_out1, sock_out2])
                 elif command == "blockchain":
                     print(f"Blockchain: {bc.print_blockchain(blockchain)}")
+                elif command == "database":
+                    print(f"Database: {database}")
             elif sender == "server":
                 sender_pid = int(sender_tokens[1])
                 # example payload = promise - 3,2, - 2,2 - put 'hello world'
@@ -342,6 +350,8 @@ def server_communications(stream):
                                     args=(), daemon=True).start()
                 elif command == "blockchain":
                     print(f"Blockchain: {bc.print_blockchain(blockchain)}")
+                elif command == "database":
+                    print(f"Database: {database}")
         else:
             break
 
