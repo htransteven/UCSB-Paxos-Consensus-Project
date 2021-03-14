@@ -27,11 +27,35 @@ def set_leader(new_leader):
     leader = new_leader
     leader_lock.release()
 
+def decrement_leader():
+    global leader, min_pid, max_pid
+    if leader == min_pid:
+        set_leader(max_pid)
+    else:
+        set_leader(leader - 1)
+
 def set_leader_stream(stream):
     global leader_stream, leader_stream_lock
     leader_stream_lock.acquire()
     leader_stream = stream
     leader_stream_lock.release()
+
+last_sent_command = None
+last_sent_last_sent_command_lock = threading.Lock()
+last_sent_time = None
+last_sent_time_lock = threading.Lock()
+
+def set_last_sent_command(cmd):
+    global last_sent_command, last_sent_last_sent_command_lock
+    last_sent_last_sent_command_lock.acquire()
+    last_sent_command = cmd
+    last_sent_last_sent_command_lock.release()
+
+def set_last_sent_time(time):
+    global last_sent_time, last_sent_time_lock
+    last_sent_time_lock.acquire()
+    last_sent_time = time
+    last_sent_time_lock.release()
     
 def server_communications(stream, stream_pid):
     global leader
@@ -61,9 +85,12 @@ def server_communications(stream, stream_pid):
                 sender_pid = int(sender_tokens[1])
                 payload_tokens = payload.split(PAYLOAD_DELIMITER)
                 command = payload_tokens[0]
-                if command == "prepare" or command == "accept" or command == "decide":
+                if command == "get" or command == "put":
+                    key = payload_tokens[1]
+                    value = payload_tokens[2]
+                    print(f'[{sender_pid}]: {key} = {value}', flush=True)
+                else:
                     continue
-                print(f'[{sender_pid}]: {payload}', flush=True)
 
 def input_listener():
     global leader_stream
@@ -74,6 +101,12 @@ def input_listener():
         else:
             message = PAYLOAD_DELIMITER.join(user_input.split(" ", 2))
             try:
+                message_tokens = message.split(PAYLOAD_DELIMITER)
+                cmd = message_tokens[0]
+                if cmd == "put" or cmd == "get":
+                    set_last_sent_command(cmd)
+                    set_last_sent_time(time.time() + 5)
+
                 leader_stream.sendall(str.encode("client -> " + message))
             except Exception as e:
                 connection_result = connect_to_leader()
@@ -96,17 +129,24 @@ def connect_to_server(pid):
 def connect_to_leader():
     global leader, servers, max_pid
 
-    server_id = max_pid
-    while server_id >= min_pid:
-        leader_stream = connect_to_server(server_id)
+    if leader == None:
+        set_leader(max_pid)
+
+    cycle_start = leader
+    first_attempt = True
+
+    while leader != cycle_start or first_attempt:
+        if first_attempt:
+            first_attempt = False
+
+        leader_stream = connect_to_server(leader)
         if leader_stream != None:
-            set_leader(server_id)
             set_leader_stream(leader_stream)
             threading.Thread(target=server_communications,
-            args=(leader_stream, server_id), daemon=True).start()
+            args=(leader_stream, leader), daemon=True).start()
             threading.Thread(target=input_listener, args=(), daemon=True).start()
             return leader_stream
-        server_id -= 1
+        decrement_leader()
     else:
         print(f"all servers are down")
         helpers.handle_exit([leader_stream])

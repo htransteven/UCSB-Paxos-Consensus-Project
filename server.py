@@ -293,15 +293,15 @@ def handle_get_callback(stream):
     def callback(block):
         global database
         if block.operation.key in database:
-            direct_message(f"{block.operation.key}: {database[block.operation.key]}", stream)
+            direct_message(f"get{PAYLOAD_DELIMITER}{block.operation.key}{PAYLOAD_DELIMITER}{database[block.operation.key]}", stream)
         else:
-            direct_message(f"no value was found for the key: {block.operation.key}", stream)
+            direct_message(f"get{PAYLOAD_DELIMITER}{block.operation.key}{PAYLOAD_DELIMITER}NO_KEY", stream)
     return callback
 
 def handle_put_callback(stream):
     def callback(block):
         global database
-        direct_message(f"{block.operation.key}: {block.operation.value}", stream)
+        direct_message(f"put{PAYLOAD_DELIMITER}{block.operation.key}{PAYLOAD_DELIMITER}{block.operation.value}", stream)
     return callback
 
 def server_communications(stream):
