@@ -18,26 +18,33 @@ port_base = 6000
 pid = int(sys.argv[1])  # pid = 1, 2, 3, 4, or 5
 max_clients = 4
 
+broken_streams = {
+    1: False,
+    2: False,
+    3: False,
+    4: False,
+    5: False
+}
+broken_streams_lock = threading.Lock()
+
+def update_broken_streams(server_id, status):
+    global broken_streams, broken_streams_lock
+    broken_streams_lock.acquire()
+    broken_streams[server_id] = status
+    broken_streams_lock.release()
+
 # Server data
 temporary_operations = queue.Queue(maxsize=0)
 database = {}
 blockchain = []
 
 # Paxos Information
-leader = pid
-leader_lock = threading.Lock()
 acks = 0
 acks_lock = threading.Lock()
 highest_received_ballot = (0,0)
 highest_received_ballot_lock = threading.Lock()
 highest_received_val = None
 highest_received_val_lock = threading.Lock()
-
-def set_leader(new_leader):
-    global leader, leader_lock
-    leader_lock.acquire()
-    leader = new_leader
-    leader_lock.release()
 
 def increment_acks():
     global acks, acks_lock
@@ -158,21 +165,22 @@ def broadcast_decide():
     global ballot_num, accept_val
     broadcast_message(f"decide{PAYLOAD_DELIMITER}{ballot_num[0]},{ballot_num[1]}{PAYLOAD_DELIMITER}{accept_val}")
 
-def send_leader_to_client_stream():
-    global inputStreams
-    if len(inputStreams) <= 2:
-        return
-    
-    broadcast_message(f"server NL {leader}")
-
-def send_client_leader_pid(stream):
-    global leader
-    time.sleep(0.5)
-    stream.sendall(str.encode(f"server CL {leader}"))
-
 #######################################################################
 # FUNCTIONS TO HANDLE RECEIVED MESSAGES
 #######################################################################
+def handle_received_failLink(src, dest):
+    global pid
+    print(f"received failLink command from {src}")
+    if pid == dest:
+        print(f"breaking link with {src}")
+        update_broken_streams(src, True)
+
+def handle_received_fixLink(src,dest):
+    global pid
+    if pid == dest:
+        update_broken_streams(src, False)
+
+# Begin Paxos functions
 def handle_received_prepare(received_ballot_num, stream):
     global ballot_num
     if received_ballot_num >= ballot_num:
@@ -203,9 +211,10 @@ def handle_received_decide(received_ballot_num, received_accept_val):
     set_ballot_num((received_ballot_num[0] + 1, pid))
     set_accept_num(received_ballot_num)
     set_accept_val(received_accept_val)
+# End Paxos functions
 
 def server_communications(stream):
-    global leader, pid
+    global pid, broken_streams
     addr = stream.getsockname()
     while True:
         data = stream.recv(1024)
@@ -248,18 +257,30 @@ def server_communications(stream):
                     persist()
                 elif command == "reconstruct":
                     reconstruct()
-                elif command == "leader":
-                    threading.Thread(target=send_client_leader_pid,
-                                    args=(stream,), daemon=True).start()
                 elif command == "exit":
                     helpers.handle_exit([inputStreams[0], inputStreams[1], sock_out1, sock_out2])
             elif sender == "server":
-                sender_pid = sender_tokens[1]
-                print(f'[{sender_pid}]: {payload}', flush=True)
+                sender_pid = int(sender_tokens[1])
                 # example payload = promise - 3,2, - 2,2 - put 'hello world'
                 payload_tokens = payload.split(PAYLOAD_DELIMITER)
                 command = payload_tokens[0]
-                if command == "prepare":
+                if command == "fixLink":
+                    src = int(payload_tokens[1])
+                    dest = int(payload_tokens[2])
+                    threading.Thread(target=handle_received_fixLink,
+                            args=(src, dest), daemon=True).start()
+                else:
+                    if broken_streams[sender_pid] == True:
+                        continue
+
+                print(f'[{sender_pid}]: {payload}', flush=True)
+                
+                if command == "failLink":
+                    src = int(payload_tokens[1])
+                    dest = int(payload_tokens[2])
+                    threading.Thread(target=handle_received_failLink,
+                            args=(src, dest), daemon=True).start()
+                elif command == "prepare":
                     received_ballot_num = tuple(int(e) for e in payload_tokens[1].split(","))
 
                     threading.Thread(target=handle_received_prepare,
@@ -329,7 +350,6 @@ def begin_leader_election(proposed_value):
 
 # accept any incoming socket connection and create a thread to handle communication on this new stream
 def accept_connections():
-    global leader
     while True:
         stream, addr = sock_in1.accept()
         inputStreams.append(stream)
@@ -354,8 +374,35 @@ def send_connections():
                      args=(sock_out2,), daemon=True).start()
         time.sleep(1)
 
+def handle_failLink(src, dest):
+    broadcast_message(f"failLink{PAYLOAD_DELIMITER}{src}{PAYLOAD_DELIMITER}{dest}")
+    update_broken_streams(dest, True)
+
+def handle_fixLink(src, dest):
+    broadcast_message(f"fixLink{PAYLOAD_DELIMITER}{src}{PAYLOAD_DELIMITER}{dest}")
+    update_broken_streams(dest, False)
+
+def input_listener():
+    global leader_stream
+    user_input = input()
+    while True:
+        tokens = user_input.split(" ")
+        command = tokens[0]
+        if command == "failLink":
+            src = int(tokens[1])
+            dest = int(tokens[2])
+            threading.Thread(target=handle_failLink,
+                     args=(src, dest), daemon=True).start()
+        elif command == "fixLink":
+            src = int(tokens[1])
+            dest = int(tokens[2])
+            threading.Thread(target=handle_fixLink,
+                     args=(src, dest), daemon=True).start()
+        user_input = input()
+
 threading.Thread(target=accept_connections, args=()).start()
 threading.Thread(target=send_connections, args=()).start()
+threading.Thread(target=input_listener, args=()).start()
 
 while True:
     try:
