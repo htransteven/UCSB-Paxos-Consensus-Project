@@ -162,12 +162,12 @@ inputStreams = []
 #######################################################################
 # FUNCTIONS TO SEND MESSAGES
 #######################################################################
-def direct_message(message, stream, delay = 0.5):
+def direct_message(message, stream, delay = 1):
     helpers.broadcast_message(f"server {pid} -> {message}", [stream], delay)
 
 # could include processor id in message if we needed
 # general broadcasting function prepends [pid] before all messages
-def broadcast_message(message, delay = 0.5):
+def broadcast_message(message, delay = 1):
     global sock_out1, sock_out2, inputStreams
     helpers.broadcast_message(f"server {pid} -> {message}", [sock_out1, sock_out2] + inputStreams, delay)
 
@@ -330,7 +330,7 @@ def server_communications(stream):
                                     args=(sentence,0), daemon=True).start()
                     payload_tokens = sentence.split(PAYLOAD_DELIMITER)
                     command = payload_tokens[0]
-                if command == "down":
+                if command == "failProcess":
                     time.sleep(0.1)
                     helpers.handle_exit([sock_in1, sock_out1, sock_out2])
                     return
@@ -363,7 +363,7 @@ def server_communications(stream):
                 payload_tokens = payload.split(PAYLOAD_DELIMITER)
                 command = payload_tokens[0]
 
-                if command == "down":
+                if command == "failProcess":
                     helpers.handle_exit([sock_in1, sock_out1, sock_out2])
                     return
 
@@ -542,7 +542,10 @@ def input_listener():
     while True:
         tokens = user_input.split(" ")
         command = tokens[0]
-        if command == "failLink":
+        if command == "failProcess":
+            helpers.handle_exit([sock_in1, sock_out1, sock_out2])
+            return
+        elif command == "failLink":
             src = int(tokens[1])
             dest = int(tokens[2])
             threading.Thread(target=handle_failLink,

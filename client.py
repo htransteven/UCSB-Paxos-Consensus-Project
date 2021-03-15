@@ -15,7 +15,7 @@ encoding = 'utf-8'
 port_base = 6000
 min_pid = 1
 max_pid = 5
-TIMEOUT_LENGTH = 5
+TIMEOUT_LENGTH = 10
 
 start_time = time.time()
 
