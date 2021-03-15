@@ -15,6 +15,15 @@ encoding = 'utf-8'
 port_base = 6000
 min_pid = 1
 max_pid = 5
+TIMEOUT_LENGTH = 5
+
+start_time = time.time()
+
+def log(message):
+    print(f"[{round(time.time() - start_time, 2)} - INFO] {message}")
+
+def direct_message(message, stream, delay = 0.2):
+    helpers.broadcast_message(f"client -> {message}", [stream], delay)
 
 leader = None
 leader_lock = threading.Lock()
@@ -42,23 +51,15 @@ def set_leader_stream(stream):
 
 last_sent_command = None
 last_sent_last_sent_command_lock = threading.Lock()
-last_sent_time = None
-last_sent_time_lock = threading.Lock()
 
 def set_last_sent_command(cmd):
     global last_sent_command, last_sent_last_sent_command_lock
     last_sent_last_sent_command_lock.acquire()
     last_sent_command = cmd
     last_sent_last_sent_command_lock.release()
-
-def set_last_sent_time(time):
-    global last_sent_time, last_sent_time_lock
-    last_sent_time_lock.acquire()
-    last_sent_time = time
-    last_sent_time_lock.release()
     
 def server_communications(stream, stream_pid):
-    global leader
+    global leader, start_time
 
     addr = stream.getsockname()
     while True:
@@ -86,18 +87,35 @@ def server_communications(stream, stream_pid):
                 payload_tokens = payload.split(PAYLOAD_DELIMITER)
                 command = payload_tokens[0]
                 if command == "get" or command == "put":
+                    set_last_sent_command(None)
                     key = payload_tokens[1]
                     value = payload_tokens[2]
-                    print(f'[{sender_pid}]: {key} = {value}', flush=True)
+                    print(f'[{round(time.time() - start_time, 2)} - P{sender_pid}]: {key} = {value}', flush=True)
                 else:
                     continue
+
+def resend_payload(payload):
+    global leader, last_sent_command, leader_stream
+
+    timeout = time.time() + TIMEOUT_LENGTH
+    while timeout >= time.time():
+        if last_sent_command == None:
+            return
+    
+    log(f"no response from {leader} after {TIMEOUT_LENGTH} seconds")
+    decrement_leader()
+    connect_to_leader()
+    log(f"resending {payload} to {leader}")
+    direct_message(payload, leader_stream)
+    threading.Thread(target=resend_payload, args=(payload,), daemon=True).start()
+        
 
 def input_listener():
     global leader_stream
     user_input = input()
     while True:
         if user_input == "leader":
-            print(f"I think the leader is server {leader}")
+            log(f"I think the leader is server {leader}")
         else:
             message = PAYLOAD_DELIMITER.join(user_input.split(" ", 2))
             try:
@@ -105,9 +123,9 @@ def input_listener():
                 cmd = message_tokens[0]
                 if cmd == "put" or cmd == "get":
                     set_last_sent_command(cmd)
-                    set_last_sent_time(time.time() + 5)
 
-                leader_stream.sendall(str.encode("client -> " + message))
+                direct_message(message, leader_stream)
+                threading.Thread(target=resend_payload, args=(message,), daemon=True).start()
             except Exception as e:
                 connection_result = connect_to_leader()
                 if connection_result == None:
@@ -116,7 +134,6 @@ def input_listener():
         user_input = input()
 
 def connect_to_server(pid):
-    # print(f"attempting to connect to server {pid}")
     sock_server_pid = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock_server_pid.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
@@ -148,7 +165,7 @@ def connect_to_leader():
             return leader_stream
         decrement_leader()
     else:
-        print(f"all servers are down")
+        log(f"all servers are down, shutting down client...")
         helpers.handle_exit([leader_stream])
         return None
     

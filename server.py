@@ -202,13 +202,13 @@ def broadcast_decide():
 def handle_received_failLink(src, dest):
     global pid
     if pid == dest:
-        print(f"[{dest}] --// broken stream //-- [{src}]")
+        print(f"[{dest}]---/ ? /---[{src}]")
         update_broken_streams(src, True)
 
 def handle_received_fixLink(src,dest):
     global pid
     if pid == dest:
-        print(f"[{dest}] ---- fixed stream ----- [{src}]")
+        print(f"[{dest}]--->->->---[{src}]")
         update_broken_streams(src, False)
 
 # Begin Paxos functions
@@ -231,16 +231,18 @@ def handle_received_accept(received_ballot_num, received_accept_val, stream):
     if received_ballot_num >= ballot_num:
         set_ballot_num((received_ballot_num[0] + 1, pid))
         set_accept_num(received_ballot_num)
-        print(f"received new block RAW: {received_accept_val}")
+        #print(f"received new block RAW: {received_accept_val}")
         block = bc.parse_block_from_payload(received_accept_val)
-        print(f"received new block: {block}")
-        print(f"received new block, prev_hash: {block.prev_hash}")
-        if len(blockchain) > 0:
-            print(f"tail block: {blockchain[-1]}")
-            print(f"tail block hash: {bc.hash_block(blockchain[-1])}")
+        #print(f"received new block: {block}")
+        #print(f"received new block, prev_hash: {block.prev_hash}")
+        #if len(blockchain) > 0:
+            #print(f"tail block: {blockchain[-1]}")
+            #print(f"tail block hash: {bc.hash_block(blockchain[-1])}")
         
         if len(blockchain) > 0 and block.prev_hash != bc.hash_block(blockchain[-1]):
             # this server is out of sync and behind, ask leader for up-to-date blockchain
+            reset_accept_val()
+            reset_accept_num()
             direct_message(f"blockchain{PAYLOAD_DELIMITER}sync-request", stream)
         else:
             set_accept_val(block)
@@ -305,7 +307,7 @@ def handle_put_callback(stream):
     return callback
 
 def server_communications(stream):
-    global pid, blockchain, database, broken_streams
+    global pid, blockchain, database, broken_streams, sock_in1, sock_out1, sock_out2
     addr = stream.getsockname()
     while True:
         data = stream.recv(1024)
@@ -325,9 +327,13 @@ def server_communications(stream):
                 if command == "broadcast":
                     sentence = payload_tokens[1].strip("'")
                     threading.Thread(target=broadcast_message,
-                                    args=(sentence,), daemon=True).start()
+                                    args=(sentence,0), daemon=True).start()
                     payload_tokens = sentence.split(PAYLOAD_DELIMITER)
                     command = payload_tokens[0]
+                if command == "down":
+                    time.sleep(0.1)
+                    helpers.handle_exit([sock_in1, sock_out1, sock_out2])
+                    return
                 if command == "put":
                     key = payload_tokens[1]
                     value = payload_tokens[2].strip("'")
@@ -346,33 +352,41 @@ def server_communications(stream):
                 elif command == "exit":
                     helpers.handle_exit([inputStreams[0], inputStreams[1], sock_out1, sock_out2])
                 elif command == "blockchain":
-                    print(f"----- Blockchain Head -----\n{bc.print_blockchain(blockchain)}----- Blockchain Tail -----")
+                    print(f"--- [BC Head] ---\n{bc.print_blockchain(blockchain)}--- [BC Tail] ---")
                 elif command == "database":
                     print(f"Database: {database}")
                 elif command == "state":
-                    print(f"----- State -----\n{get_state_string()}-----------------")
+                    print(f"--- State ---\n{get_state_string()}-------------")
             elif sender == "server":
                 sender_pid = int(sender_tokens[1])
                 # example payload = promise - 3,2, - 2,2 - put 'hello world'
                 payload_tokens = payload.split(PAYLOAD_DELIMITER)
                 command = payload_tokens[0]
+
+                if command == "down":
+                    helpers.handle_exit([sock_in1, sock_out1, sock_out2])
+                    return
+
                 if command == "fixLink":
                     src = int(payload_tokens[1])
                     dest = int(payload_tokens[2])
                     threading.Thread(target=handle_received_fixLink,
                             args=(src, dest), daemon=True).start()
+                    continue
                 else:
                     if broken_streams[sender_pid] == True:
                         continue
-
-                print(f'[P{sender_pid}]: {payload}', flush=True)
                 
                 if command == "failLink":
                     src = int(payload_tokens[1])
                     dest = int(payload_tokens[2])
                     threading.Thread(target=handle_received_failLink,
                             args=(src, dest), daemon=True).start()
-                elif command == "prepare":
+                    continue
+                
+                print(f'[P{sender_pid}]: {payload}', flush=True)
+
+                if command == "prepare":
                     received_ballot_num = tuple(int(e) for e in payload_tokens[1].split(","))
 
                     threading.Thread(target=handle_received_prepare,
@@ -406,7 +420,6 @@ def server_communications(stream):
                     threading.Thread(target=handle_blockchain_reconstruct,
                                     args=(), daemon=True).start()
                 elif command == "blockchain":
-                    print(f"blockchain tokens: {payload_tokens}")
                     if len(payload_tokens) > 1:
                         action = payload_tokens[1]
                         if action == "sync-request":
@@ -422,11 +435,11 @@ def server_communications(stream):
                             threading.Thread(target=handle_blockchain_reconstruct,
                                             args=(sender_pid,callback), daemon=True).start()
                     else:
-                        print(f"----- Blockchain Head -----\n{bc.print_blockchain(blockchain)}----- Blockchain Tail -----")
+                        print(f"--- [BC Head] ---\n{bc.print_blockchain(blockchain)}--- [BC Tail] ---")
                 elif command == "database":
                     print(f"Database: {database}")
                 elif command == "state":
-                    print(f"----- State -----\n{get_state_string()}-----------------")
+                    print(f"--- State ---\n{get_state_string()}-------------")
         else:
             break
 
@@ -438,6 +451,7 @@ def server_communications(stream):
 def begin_paxos(proposed_operation, callback):
     global blockchain, acks, ballot_num, accept_val, highest_received_val
 
+    reset_acks()
     increment_ballot_num()
 
     # phase 1
@@ -479,6 +493,8 @@ def begin_paxos(proposed_operation, callback):
 
     # reset
     reset_acks()
+    reset_accept_num()
+    reset_accept_val()
     reset_highest_received_ballot()
     reset_highest_received_val()
 
