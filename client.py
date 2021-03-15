@@ -1,5 +1,6 @@
 import helpers
 from helpers import PAYLOAD_DELIMITER
+import blockchain as bc
 
 import socket
 import os
@@ -15,55 +16,68 @@ encoding = 'utf-8'
 port_base = 6000
 min_pid = 1
 max_pid = 5
-TIMEOUT_LENGTH = 10
+TIMEOUT_LENGTH = 30
 
 start_time = time.time()
 
 def log(message):
     print(f"[{round(time.time() - start_time, 2)} - INFO] {message}")
 
-def direct_message(message, stream, delay = 0.2):
+def direct_message(message, stream, delay = 1):
     helpers.broadcast_message(f"client -> {message}", [stream], delay)
 
-leader = None
-leader_lock = threading.Lock()
+leader_pid = None
+leader_pid_lock = threading.Lock()
 leader_stream = None
 leader_stream_lock = threading.Lock()
 
-def set_leader(new_leader):
-    global leader, leader_lock
-    leader_lock.acquire()
-    leader = new_leader
-    leader_lock.release()
+def set_leader_pid(new_leader):
+    global leader_pid, leader_pid_lock
+    leader_pid_lock.acquire()
+    leader_pid = new_leader
+    leader_pid_lock.release()
 
-def decrement_leader():
-    global leader, min_pid, max_pid
-    if leader == min_pid:
-        set_leader(max_pid)
+def decrement_leader_pid():
+    global leader_pid, min_pid, max_pid
+    if leader_pid == min_pid:
+        set_leader_pid(max_pid)
     else:
-        set_leader(leader - 1)
+        set_leader_pid(leader_pid - 1)
 
 def set_leader_stream(stream):
-    global leader_stream, leader_stream_lock
+    global leader_pid, leader_stream, leader_stream_lock
     leader_stream_lock.acquire()
+    log(f"set leader_pid to {leader_pid}")
     leader_stream = stream
     leader_stream_lock.release()
 
-last_sent_command = None
-last_sent_last_sent_command_lock = threading.Lock()
+current_operation = None
+current_operation_lock = threading.Lock()
 
-def set_last_sent_command(cmd):
-    global last_sent_command, last_sent_last_sent_command_lock
-    last_sent_last_sent_command_lock.acquire()
-    last_sent_command = cmd
-    last_sent_last_sent_command_lock.release()
+def set_current_operation(op):
+    global current_operation, current_operation_lock
+    current_operation_lock.acquire()
+    current_operation = op
+    current_operation_lock.release()
+
+def reset_current_operation():
+    set_current_operation(None)
+
+resp_received = None
+resp_received_lock = threading.Lock()
+
+def set_resp_received(received):
+    global resp_received, resp_received_lock
+    resp_received_lock.acquire()
+    resp_received = received
+    resp_received_lock.release()
     
 def server_communications(stream, stream_pid):
-    global leader, start_time
+    global leader_pid, start_time
 
     addr = stream.getsockname()
     while True:
-        if stream_pid != leader:
+        if stream_pid != leader_pid:
             return
 
         try:
@@ -85,44 +99,62 @@ def server_communications(stream, stream_pid):
             if sender == "server":
                 sender_pid = int(sender_tokens[1])
                 payload_tokens = payload.split(PAYLOAD_DELIMITER)
+                print(f'[RAW - {round(time.time() - start_time, 2)} - P{sender_pid}]: tokens = {payload_tokens}', flush=True)
                 command = payload_tokens[0]
-                if command == "get" or command == "put":
-                    set_last_sent_command(None)
-                    key = payload_tokens[1]
-                    value = payload_tokens[2]
-                    print(f'[{round(time.time() - start_time, 2)} - P{sender_pid}]: {key} = {value}', flush=True)
+                if command == "leader":
+                    leader_id = int(payload_tokens[1])
+                    set_leader_pid(leader_id)
+                    connect_to_leader()
+                elif command == "resp" and sender_pid == leader_pid:
+                    value = payload_tokens[3]
+                    if value == "None":
+                        value = None
+                    received_op = bc.Operation(payload_tokens[1],payload_tokens[2],value)
+                    print(f'[DEBUG - {round(time.time() - start_time, 2)} - P{sender_pid}]: {received_op.key} = {received_op.value}', flush=True)
+                    if received_op == current_operation:
+                        set_resp_received(True)
+                        set_current_operation(None)
+                        print(f'[{round(time.time() - start_time, 2)} - P{sender_pid}]: {received_op.key} = {received_op.value}', flush=True)
                 else:
                     continue
 
 def resend_payload(payload):
-    global leader, last_sent_command, leader_stream
+    global leader_pid, resp_received, leader_stream
 
     timeout = time.time() + TIMEOUT_LENGTH
     while timeout >= time.time():
-        if last_sent_command == None:
+        if resp_received:
             return
     
-    log(f"no response from {leader} after {TIMEOUT_LENGTH} seconds")
-    decrement_leader()
+    log(f"no response from {leader_pid} after {TIMEOUT_LENGTH} seconds")
+    decrement_leader_pid()
     connect_to_leader()
-    log(f"resending {payload} to {leader}")
+    log(f"resending {payload} to {leader_pid}")
     direct_message(payload, leader_stream)
     threading.Thread(target=resend_payload, args=(payload,), daemon=True).start()
         
 
 def input_listener():
-    global leader_stream
+    global leader_stream, current_operation, resp_received
     user_input = input()
     while True:
-        if user_input == "leader":
-            log(f"I think the leader is server {leader}")
+        if user_input == "leader_pid":
+            log(f"I think the leader_pid is server {leader_pid}")
+        if user_input == "state":
+            log(f"Current State:\nCurrent Operation: {current_operation}\nResponse Received: {resp_received}")
         else:
             message = PAYLOAD_DELIMITER.join(user_input.split(" ", 2))
             try:
                 message_tokens = message.split(PAYLOAD_DELIMITER)
                 cmd = message_tokens[0]
-                if cmd == "put" or cmd == "get":
-                    set_last_sent_command(cmd)
+                key = message_tokens[1]
+                if cmd == "put":
+                    value = message_tokens[2].strip("'")
+                    set_current_operation(bc.Operation(cmd, key, value))
+                    set_resp_received(False)
+                elif cmd == "get":
+                    set_current_operation(bc.Operation(cmd, key, None))
+                    set_resp_received(False)
 
                 direct_message(message, leader_stream)
                 threading.Thread(target=resend_payload, args=(message,), daemon=True).start()
@@ -144,26 +176,26 @@ def connect_to_server(pid):
     return sock_server_pid
 
 def connect_to_leader():
-    global leader, servers, max_pid
+    global leader_pid, servers, max_pid
 
-    if leader == None:
-        set_leader(max_pid)
+    if leader_pid == None:
+        set_leader_pid(max_pid)
 
-    cycle_start = leader
+    cycle_start = leader_pid
     first_attempt = True
 
-    while leader != cycle_start or first_attempt:
+    while leader_pid != cycle_start or first_attempt:
         if first_attempt:
             first_attempt = False
 
-        leader_stream = connect_to_server(leader)
+        leader_stream = connect_to_server(leader_pid)
         if leader_stream != None:
             set_leader_stream(leader_stream)
             threading.Thread(target=server_communications,
-            args=(leader_stream, leader), daemon=True).start()
+            args=(leader_stream, leader_pid), daemon=True).start()
             threading.Thread(target=input_listener, args=(), daemon=True).start()
             return leader_stream
-        decrement_leader()
+        decrement_leader_pid()
     else:
         log(f"all servers are down, shutting down client...")
         helpers.handle_exit([leader_stream])

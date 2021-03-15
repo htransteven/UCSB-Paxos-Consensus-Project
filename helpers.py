@@ -5,10 +5,12 @@ import time
 
 PAYLOAD_DELIMITER = " - "
 
-def broadcast_message(message, streams, delay):
+def broadcast_message(message, streams, delay, debug=False):
     time.sleep(delay)
     for s in streams:
         try:
+            if debug:
+                print(f"[DEBUG] sent {message}")
             s.sendall(str.encode(message))
         except:
             print(f'failed to send {message} to {s.getsockname()}', flush=True)

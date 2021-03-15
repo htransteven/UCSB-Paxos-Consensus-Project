@@ -17,7 +17,6 @@ def print_blockchain(blockchain):
 # ex. payload put - key - value - hash - nonce
 def parse_block_from_payload(payload):
     payload_tokens = payload.split(PAYLOAD_DELIMITER)
-    print(f"tokens from payload: {payload_tokens}")
     op = Operation(cmd=payload_tokens[0], key=payload_tokens[1], value=payload_tokens[2])
     block = Block(op=op, prev_hash=payload_tokens[3], nonce=payload_tokens[4])
     return block
@@ -80,7 +79,7 @@ class Block:
             randomNonce += 1
             currHash = sha256(str.encode(str(self.operation) + str(randomNonce))).hexdigest()
         self.nonce = randomNonce
-        print(f'Done mining, took {randomNonce} attempts.')
+        # print(f'Done mining, took {randomNonce} attempts.')
 
     def to_csv(self):
         return {'operations': str(self.operation), 'prev_hash': str(self.prev_hash), 'nonce': str(self.nonce)}
@@ -94,6 +93,14 @@ class Operation:
         self.command = cmd
         self.key = key
         self.value = value
+
+    def to_payload(self):
+        return f"{self.command}{PAYLOAD_DELIMITER}{self.key}{PAYLOAD_DELIMITER}{self.value}"
+
+    def __eq__(self, other):
+        if other == None:
+            return False
+        return self.command == other.command and self.key == other.key and self.value == other.value
         
     def __str__(self):
      return str(self.command) + helpers.PAYLOAD_DELIMITER + str(self.key) + helpers.PAYLOAD_DELIMITER + str(self.value)
