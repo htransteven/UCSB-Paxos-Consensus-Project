@@ -13,7 +13,8 @@ def broadcast_message(message, streams, delay, debug=False):
                 print(f"[DEBUG] sent {message}")
             s.sendall(str.encode(message))
         except:
-            print(f'failed to send {message} to {s.getsockname()}', flush=True)
+            if debug:
+                print(f'failed to send {message} to {s.getsockname()}', flush=True)
 
 def handle_exit(sockets):
     print(f'\nExiting program...', flush=True)
