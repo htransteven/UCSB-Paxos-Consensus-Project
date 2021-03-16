@@ -100,6 +100,9 @@ class Operation:
     def __eq__(self, other):
         if other == None:
             return False
+        elif self.command == "get" and other.command == "get":
+            return self.key == other.key
+        
         return self.command == other.command and self.key == other.key and self.value == other.value
         
     def __str__(self):

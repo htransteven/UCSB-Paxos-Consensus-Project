@@ -16,7 +16,7 @@ encoding = 'utf-8'
 port_base = 6000
 min_pid = 1
 max_pid = 5
-TIMEOUT_LENGTH = 30
+TIMEOUT_LENGTH = 15
 
 start_time = time.time()
 
@@ -129,8 +129,8 @@ def resend_payload(payload):
     log(f"no response from {leader_pid} after {TIMEOUT_LENGTH} seconds")
     decrement_leader_pid()
     connect_to_leader()
-    log(f"resending {payload} to {leader_pid}")
-    direct_message(payload, leader_stream)
+    log(f"resending {payload} to {leader_pid} with 'leader' command")
+    direct_message(f"leader{PAYLOAD_DELIMITER}{payload}", leader_stream)
     threading.Thread(target=resend_payload, args=(payload,), daemon=True).start()
         
 
