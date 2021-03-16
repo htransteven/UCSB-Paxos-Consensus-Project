@@ -15,7 +15,7 @@ encoding = 'utf-8'
 port_base = 6000
 pid = int(sys.argv[1])  # pid = 1, 2, 3, 4, or 5
 max_clients = 4
-MESSAGE_DELAY = 1.5
+MESSAGE_DELAY = 1
 
 leader_pid = None
 leader_pid_lock = threading.Lock()
@@ -339,12 +339,20 @@ def handle_operations_queue():
     while True:
         # wait until next paxos run
         wait = 0
+        print(f"waiting on: {accept_val}")
         while not new_election and (accept_val != None or len(temporary_operations.queue) == 0):
             wait += 1
 
         next_op = temporary_operations.get()
         threading.Thread(target=begin_paxos,
                                     args=(next_op[0],next_op[1]), daemon=True).start()
+
+def stream_is_live(stream):
+    try:
+        s.send("live test")
+    except:
+        return False
+    return True
 
 def server_communications(stream):
     global pid, blockchain, database, broken_streams, sock_in1, sock_out1, sock_out2, leader_pid, leader_stream, new_election, temporary_operations
@@ -363,18 +371,19 @@ def server_communications(stream):
                 command = payload_tokens[0]
 
                 if command == "leader":
-                    if leader_pid != pid:
+                    if leader_pid != pid and leader_pid != None:
                         set_new_election(True)
                     payload_tokens = payload_tokens[1:]
                     command = payload_tokens[0]
                     payload = PAYLOAD_DELIMITER.join(payload_tokens)
                 
                 if leader_stream != None and not new_election:
-                    log(f'Forward Payload: {payload}')
-                    direct_message(f"leader{PAYLOAD_DELIMITER}{leader_pid}", stream)
-                    threading.Thread(target=forward_message,
-                                    args=(payload,leader_stream), daemon=True).start()
-                    continue
+                    if stream_is_live(leader_stream):
+                        log(f'Forward Payload: {payload}')
+                        direct_message(f"leader{PAYLOAD_DELIMITER}{leader_pid}", stream)
+                        threading.Thread(target=forward_message,
+                                        args=(payload,leader_stream), daemon=True).start()
+                        continue
                 
                 # become leader
                 if(leader_pid != pid):
@@ -556,7 +565,9 @@ def begin_paxos(proposed_operation, callback):
     block.mine()
 
     # ballot recovery
+    recovered = False
     if highest_received_val != None:
+        recovered = True
         log(f"recovered {highest_received_val} from previous paxos sequence")
         block = bc.parse_block_from_payload(highest_received_val)
 
@@ -596,6 +607,10 @@ def begin_paxos(proposed_operation, callback):
     reset_accept_val()
     reset_highest_received_ballot()
     reset_highest_received_val()
+    
+    if recovered:
+        threading.Thread(target=begin_paxos,
+                        args=(proposed_operation,callback), daemon=True).start()         
 
 # accept any incoming socket connection and create a thread to handle communication on this new stream
 def accept_connections():
@@ -663,7 +678,7 @@ def input_listener():
                 block_index = int(tokens[1])
                 log(f"Block [{block_index}]: {blockchain[block_index]}")
             else:
-                log(f"Blockchain: {bc.print_blockchain(blockchain)}")
+                log(f"--- [BC Head] ---\n{bc.print_blockchain(blockchain)}--- [BC Tail] ---")
         elif command == "state":
             log(f"--- State ---\n{get_state_string()}-------------")
         user_input = input()

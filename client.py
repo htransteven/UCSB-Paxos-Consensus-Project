@@ -16,7 +16,7 @@ encoding = 'utf-8'
 port_base = 6000
 min_pid = 1
 max_pid = 5
-TIMEOUT_LENGTH = 20
+TIMEOUT_LENGTH = 30
 
 start_time = time.time()
 
@@ -84,11 +84,11 @@ def server_communications(stream, stream_pid):
             data = stream.recv(1024)
         except socket.error as e:
             #decrement_leader_pid()
-            #connect_to_leader()
+            connect_to_leader()
             break
         if not data:
             #decrement_leader_pid()
-            #connect_to_leader()
+            connect_to_leader()
             break
 
         if data:
@@ -107,12 +107,12 @@ def server_communications(stream, stream_pid):
                     leader_id = int(payload_tokens[1])
                     set_leader_pid(leader_id)
                     connect_to_leader()
-                elif command == "resp" and sender_pid == leader_pid:
+                elif command == "resp":
                     value = payload_tokens[3]
                     if value == "None":
                         value = None
                     received_op = bc.Operation(payload_tokens[1],payload_tokens[2],value)
-                    # print(f'[DEBUG - {round(time.time() - start_time, 2)} - P{sender_pid}]: {received_op.key} = {received_op.value}', flush=True)
+                    print(f'[DEBUG - {round(time.time() - start_time, 2)} - P{sender_pid}]: {received_op.key} = {received_op.value}', flush=True)
                     if received_op == current_operation:
                         set_resp_received(True)
                         set_current_operation(None)
