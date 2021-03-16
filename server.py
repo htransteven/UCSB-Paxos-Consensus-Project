@@ -90,7 +90,7 @@ def reset_blockchain():
     set_blockchain([])
 
 def append_to_blockchain(block):
-    global database, blockchain, blockchain_lock
+    global pid, database, blockchain, blockchain_lock
     blockchain_lock.acquire()
 
     log(f"Appending block: {block.operation}")
@@ -98,6 +98,8 @@ def append_to_blockchain(block):
         database[block.operation.key] = block.operation.value
 
     blockchain.append(block)
+    threading.Thread(target=bc.persist,
+                                    args=(pid, blockchain), daemon=True).start()
     blockchain_lock.release()
 
 # Paxos Information
@@ -565,6 +567,7 @@ def begin_paxos(proposed_operation, callback):
         broadcast_message(f"leader{PAYLOAD_DELIMITER}{leader_pid}")
         threading.Thread(target=forward_message,
                         args=(proposed_operation.to_payload(),leader_stream), daemon=True).start()           
+        reset_accept_val()
         return
 
     set_accept_val(block)
