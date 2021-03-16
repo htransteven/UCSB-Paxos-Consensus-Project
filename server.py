@@ -389,7 +389,7 @@ def server_communications(stream):
                                     args=(sentence,0), daemon=True).start()
                     payload_tokens = sentence.split(PAYLOAD_DELIMITER)
                     command = payload_tokens[0]
-                if command == "failProcess":
+                if command == "down" or command == "failProcess":
                     time.sleep(0.1)
                     helpers.handle_exit([sock_in1, sock_out1, sock_out2])
                     return
@@ -414,17 +414,17 @@ def server_communications(stream):
 
                     #append_operation((bc.Operation(cmd=command, key=key, value=None), callback))
                     temporary_operations.put((bc.Operation(cmd=command, key=key, value=None), callback))
-                elif command == "persist":
+                elif command == "p" or command == "persist":
                     threading.Thread(target=bc.persist,
                                     args=(pid, blockchain), daemon=True).start()
-                elif command == "reconstruct":
+                elif command == "r" or command == "reconstruct":
                     threading.Thread(target=handle_blockchain_reconstruct,
                                     args=(), daemon=True).start()
                 elif command == "exit":
                     helpers.handle_exit([inputStreams[0], inputStreams[1], sock_out1, sock_out2])
-                elif command == "blockchain":
+                elif command == "bc" or command == "blockchain":
                     log(f"--- [BC Head] ---\n{bc.print_blockchain(blockchain)}--- [BC Tail] ---")
-                elif command == "database":
+                elif command == "db" or command == "database":
                     log(f"Database: {database}")
                 elif command == "state":
                     log(f"--- State ---\n{get_state_string()}-------------")
@@ -437,11 +437,11 @@ def server_communications(stream):
                 if command == "resp" or command == "leader":
                     continue
 
-                if command == "failProcess":
+                if command == "down" or command == "failProcess":
                     helpers.handle_exit([sock_in1, sock_out1, sock_out2])
                     return
 
-                if command == "fixLink":
+                if command == "fix" or command == "fixLink":
                     src = int(payload_tokens[1])
                     dest = int(payload_tokens[2])
                     threading.Thread(target=handle_received_fixLink,
@@ -451,7 +451,7 @@ def server_communications(stream):
                     if broken_streams[sender_pid] == True:
                         continue
                 
-                if command == "failLink":
+                if command == "fail" or command == "failLink":
                     src = int(payload_tokens[1])
                     dest = int(payload_tokens[2])
                     threading.Thread(target=handle_received_failLink,
@@ -488,13 +488,13 @@ def server_communications(stream):
 
                     threading.Thread(target=handle_received_decide,
                                     args=(received_ballot_num, received_accept_val), daemon=True).start()
-                elif command == "persist":
+                elif command == "p" or command == "persist":
                     threading.Thread(target=bc.persist,
                                     args=(pid, blockchain), daemon=True).start()
-                elif command == "reconstruct":
+                elif command == "r" or command == "reconstruct":
                     threading.Thread(target=handle_blockchain_reconstruct,
                                     args=(), daemon=True).start()
-                elif command == "blockchain":
+                elif command == "bc" or command == "blockchain":
                     if len(payload_tokens) > 1:
                         action = payload_tokens[1]
                         if action == "sync-request":
@@ -513,7 +513,7 @@ def server_communications(stream):
                                             args=(sender_pid,callback), daemon=True).start()
                     else:
                         log(f"--- [BC Head] ---\n{bc.print_blockchain(blockchain)}--- [BC Tail] ---")
-                elif command == "database":
+                elif command == "db" or command == "database":
                     log(f"Database: {database}")
                 elif command == "state":
                     log(f"--- State ---\n{get_state_string()}-------------")
@@ -634,25 +634,31 @@ def handle_fixLink(src, dest):
     update_broken_streams(dest, False)
 
 def input_listener():
-    global blockchain
+    global pid, blockchain
     user_input = input()
     while True:
         tokens = user_input.split(" ")
         command = tokens[0]
-        if command == "failProcess":
+        if command == "down" or command == "failProcess":
             helpers.handle_exit([sock_in1, sock_out1, sock_out2])
             return
-        elif command == "failLink":
+        elif command == "p" or command == "persist":
+                    threading.Thread(target=bc.persist,
+                                    args=(pid, blockchain), daemon=True).start()
+        elif command == "r" or command == "reconstruct":
+            threading.Thread(target=handle_blockchain_reconstruct,
+                            args=(), daemon=True).start()
+        elif command == "fail" or command == "failLink":
             src = int(tokens[1])
             dest = int(tokens[2])
             threading.Thread(target=handle_failLink,
                      args=(src, dest), daemon=True).start()
-        elif command == "fixLink":
+        elif command == "fix" or command == "fixLink":
             src = int(tokens[1])
             dest = int(tokens[2])
             threading.Thread(target=handle_fixLink,
                      args=(src, dest), daemon=True).start()
-        elif command == "blockchain":
+        elif command == "bc" or command == "blockchain":
             if len(tokens) > 1:
                 block_index = int(tokens[1])
                 log(f"Block [{block_index}]: {blockchain[block_index]}")
