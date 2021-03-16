@@ -363,9 +363,7 @@ def server_communications(stream):
                 command = payload_tokens[0]
 
                 if command == "leader":
-                    log(f"received leader tag")
                     if leader_pid != pid:
-                        log(f"forcing new election")
                         set_new_election(True)
                     payload_tokens = payload_tokens[1:]
                     command = payload_tokens[0]
