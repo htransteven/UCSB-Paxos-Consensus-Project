@@ -16,12 +16,12 @@ encoding = 'utf-8'
 port_base = 6000
 min_pid = 1
 max_pid = 5
-TIMEOUT_LENGTH = 15
+TIMEOUT_LENGTH = 20
 
 start_time = time.time()
 
 def log(message):
-    print(f"[{round(time.time() - start_time, 2)} - INFO] {message}")
+    print(f"[{round(time.time() - start_time, 2)} - INFO] {message}\n")
 
 def direct_message(message, stream, delay = 1):
     helpers.broadcast_message(f"client -> {message}", [stream], delay)
@@ -83,10 +83,12 @@ def server_communications(stream, stream_pid):
         try:
             data = stream.recv(1024)
         except socket.error as e:
-            connect_to_leader()
+            #decrement_leader_pid()
+            #connect_to_leader()
             break
         if not data:
-            connect_to_leader()
+            #decrement_leader_pid()
+            #connect_to_leader()
             break
 
         if data:
@@ -99,7 +101,7 @@ def server_communications(stream, stream_pid):
             if sender == "server":
                 sender_pid = int(sender_tokens[1])
                 payload_tokens = payload.split(PAYLOAD_DELIMITER)
-                print(f'[RAW - {round(time.time() - start_time, 2)} - P{sender_pid}]: tokens = {payload_tokens}', flush=True)
+                # print(f'[RAW - {round(time.time() - start_time, 2)} - P{sender_pid}]: tokens = {payload_tokens}', flush=True)
                 command = payload_tokens[0]
                 if command == "leader":
                     leader_id = int(payload_tokens[1])
@@ -110,11 +112,11 @@ def server_communications(stream, stream_pid):
                     if value == "None":
                         value = None
                     received_op = bc.Operation(payload_tokens[1],payload_tokens[2],value)
-                    print(f'[DEBUG - {round(time.time() - start_time, 2)} - P{sender_pid}]: {received_op.key} = {received_op.value}', flush=True)
+                    # print(f'[DEBUG - {round(time.time() - start_time, 2)} - P{sender_pid}]: {received_op.key} = {received_op.value}', flush=True)
                     if received_op == current_operation:
                         set_resp_received(True)
                         set_current_operation(None)
-                        print(f'[{round(time.time() - start_time, 2)} - P{sender_pid}]: {received_op.key} = {received_op.value}', flush=True)
+                        print(f'[{round(time.time() - start_time, 2)} - P{sender_pid}]: {received_op.key} = {received_op.value}\n', flush=True)
                 else:
                     continue
 
@@ -152,12 +154,15 @@ def input_listener():
                     value = message_tokens[2].strip("'")
                     set_current_operation(bc.Operation(cmd, key, value))
                     set_resp_received(False)
+                    direct_message(message, leader_stream)
+                    threading.Thread(target=resend_payload, args=(message,), daemon=True).start()
                 elif cmd == "get":
                     set_current_operation(bc.Operation(cmd, key, None))
                     set_resp_received(False)
-
-                direct_message(message, leader_stream)
-                threading.Thread(target=resend_payload, args=(message,), daemon=True).start()
+                    direct_message(message, leader_stream)
+                    threading.Thread(target=resend_payload, args=(message,), daemon=True).start()
+                else:
+                    direct_message(message, leader_stream)
             except Exception as e:
                 connection_result = connect_to_leader()
                 if connection_result == None:
