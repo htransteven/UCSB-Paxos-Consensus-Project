@@ -112,7 +112,7 @@ def server_communications(stream, stream_pid):
                     if value == "None":
                         value = None
                     received_op = bc.Operation(payload_tokens[1],payload_tokens[2],value)
-                    print(f'[DEBUG - {round(time.time() - start_time, 2)} - P{sender_pid}]: {received_op.key} = {received_op.value}', flush=True)
+                    # print(f'[DEBUG - {round(time.time() - start_time, 2)} - P{sender_pid}]: {received_op.key} = {received_op.value}', flush=True)
                     if received_op == current_operation:
                         set_resp_received(True)
                         set_current_operation(None)

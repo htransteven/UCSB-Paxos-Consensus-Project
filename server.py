@@ -339,7 +339,7 @@ def handle_operations_queue():
     while True:
         # wait until next paxos run
         wait = 0
-        print(f"waiting on: {accept_val}")
+        # log(f"waiting on: {accept_val}")
         while not new_election and (accept_val != None or len(temporary_operations.queue) == 0):
             wait += 1
 
