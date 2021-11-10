@@ -1,4 +1,4 @@
-# CS 176 Final Project
+# CS 171 Final Project
 
 This project implements multi-paxos for consesus as well as a simplified blockchain model for record keeping.
 
